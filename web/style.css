@@ -235,3 +235,4 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .face-act { position: absolute; z-index: 5; display: flex; gap: 6px; align-items: center; padding: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 18px #1d273326; }
 .face-act .x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 2px 6px; }
 .upd-bar { position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 50; display: flex; gap: 10px; align-items: center; padding: 8px 10px 8px 16px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px #1d273333; font-size: 14px; }
+.face-act .fa-n { font-size: 12px; color: var(--muted); padding: 0 4px 0 6px; white-space: nowrap; }

@@ -32,7 +32,7 @@ const { chromium } = require("playwright");
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#dlg >> text=Enregistrer le DXF")]);
   const txt = require("fs").readFileSync(await dl.path(), "utf8");
   console.log("dxf", dl.suggestedFilename(), txt.length, (txt.match(/POLYLINE/g) || []).length, "polylines");
-  await p.click("#skTools >> text=Terminer");
+  await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=extrude]");
   await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 60000 });
   console.log("vol", await G(() => [Math.round(window.gabarit.st.mesh.volume), window.gabarit.st.errors]));

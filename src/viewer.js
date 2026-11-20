@@ -200,6 +200,22 @@ export class Viewer {
     c.up.set(...Y); c.lookAt(P[0], P[1], P[2]);
     c.near = 0.1; c.far = D * 2; c.updateProjectionMatrix();
   }
+  // Aperçu du résultat pendant une sélection (congé, coque…) : volume translucide par-dessus.
+  setGhost(data) {
+    if (this.ghost) { this.scene.remove(this.ghost); this.ghost.traverse((o) => o.geometry?.dispose()); this.ghost = null; }
+    if (!data) return;
+    const g = new THREE.Group();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(data.vertices, 3));
+    geo.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+    geo.setIndex(new THREE.BufferAttribute(data.triangles, 1));
+    this.ghostMat = this.ghostMat || new THREE.MeshStandardMaterial({ color: 0xe0874f, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+    this.ghostEdge = this.ghostEdge || new THREE.LineBasicMaterial({ color: 0xb4461f, transparent: true, opacity: 0.9 });
+    g.add(new THREE.Mesh(geo, this.ghostMat));
+    const eg = new THREE.BufferGeometry(); eg.setAttribute("position", new THREE.BufferAttribute(data.lines, 3));
+    g.add(new THREE.LineSegments(eg, this.ghostEdge));
+    g.renderOrder = 2; this.ghost = g; this.scene.add(g);
+  }
   // Face mise en évidence (clic simple, hors outil).
   highlightFace(faceId) {
     if (this.selFaceObj) { this.part.remove(this.selFaceObj); this.selFaceObj = null; }
