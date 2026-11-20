@@ -179,3 +179,21 @@ dialog.wide { max-width: min(1280px, calc(100vw - 24px)); width: 100%; }
 .pts .pt.pt3 { grid-template-columns: 18px 1fr 1fr 0.8fr 22px; }
 .ent.open { fill: none; }
 .handle.mid { fill: var(--accent-soft); stroke: var(--accent); cursor: grab; }
+.subpt { fill: var(--accent); stroke: #fff; stroke-width: 1.5; pointer-events: none; }
+.subseg { fill: none; stroke: var(--accent); stroke-width: 5; stroke-opacity: .55; stroke-linecap: round; pointer-events: none; }
+.cbadge rect { fill: #fff; stroke: #7a3fd1; stroke-width: 1; }
+.cbadge text { font-size: 9.5px; fill: #7a3fd1; font-weight: 700; }
+.cbadge { pointer-events: none; }
+.dim.drive text { fill: #7a3fd1; }
+.dim.drive rect { stroke: #b99ae8; }
+.dof { margin: 6px 14px; font-size: 12.5px; padding: 7px 10px; border-radius: 8px; background: var(--paper); color: var(--ink2); }
+.dof.full { background: #eaf6ef; color: var(--ok); }
+.dof.bad { background: #fdeeee; color: var(--err); }
+.cbtns { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 14px 8px; }
+.cbtns .btn { padding: 4px 9px; font-size: 12.5px; }
+.clist { padding: 0 8px; }
+.clist .citem { display: grid; grid-template-columns: 22px 1fr auto 22px; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 6px; font-size: 12.5px; }
+.clist .citem:hover { background: var(--paper); }
+.clist .citem .g { color: #7a3fd1; font-weight: 700; text-align: center; }
+.clist .citem input { width: 70px; border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; background: var(--paper); }
+.clist .citem .x { border: 0; background: none; color: var(--muted); }

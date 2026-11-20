@@ -6,6 +6,7 @@ import { evalExpr, varsMap } from "./expr.js";
 import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, toWorld, STD_PLANES, cross, dot, norm, scale } from "./geo.js";
 import { exampleDoc } from "./example.js";
 import { sheetSVG } from "./drawing.js";
+import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => {
@@ -407,7 +408,7 @@ function renderTree() {
     },
     h("span", { class: "ic", html: ICONS[TYPES[f.type].icon] }),
     h("span", { class: "nm" }, f.name),
-    err ? h("span", { class: "err" }) : (inf && inf.found < inf.asked ? h("span", { class: "warn", title: "Certaines arêtes choisies ont disparu" }) : null),
+    err ? h("span", { class: "err" }) : (inf && (inf.found < inf.asked || inf.conflict) ? h("span", { class: "warn", title: inf.conflict ? "Contraintes incompatibles" : "Certaines arêtes choisies ont disparu" }) : null),
     h("button", { class: "more", title: "Plus d’actions", "aria-label": "Plus d’actions", onclick: (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); featMenu(f, r.left, r.bottom); } }, "⋯"));
     t.append(row);
   });
@@ -697,6 +698,71 @@ function renderProps() {
   void vars;
 }
 
+// ---------- Contraintes d'esquisse ----------
+function solveAndWrite(f, pins = []) {
+  if (!f.constraints?.length) return true;
+  const v = varsMap(doc.params); const ents = [];
+  for (const e of f.entities || []) { try { ents.push(evalEntity(e, v)); } catch { /* ignorée */ } }
+  let r = solveSketch(ents, f.entities, f.constraints, v, pins);
+  if (pins.length) r = solveSketch(ents, f.entities, f.constraints, v);
+  if (r.ok || !pins.length) writeBack(ents, f.entities);
+  return r.ok;
+}
+function measureOf(c, f) {
+  const v = varsMap(doc.params); const byId = new Map();
+  for (const e of f.entities) { try { byId.set(e.id, evalEntity(e, v)); } catch { /* ignorée */ } }
+  const R = c.refs;
+  const pt = (r) => { if (r.e === "origin") return [0, 0]; const o = byId.get(r.e); if (!o) return [0, 0]; if (o.pts) return o.pts[r.k]; if (o.type === "slot") return r.k ? [o.x2, o.y2] : [o.x1, o.y1]; return [o.cx, o.cy]; };
+  if (c.type === "length") { const o = byId.get(R[0].e); const a = o.pts[R[0].k], b = o.pts[(R[0].k + 1) % o.pts.length]; return Math.hypot(b[0] - a[0], b[1] - a[1]); }
+  if (c.type === "distance") { const a = pt(R[0]), b = pt(R[1]); return Math.hypot(b[0] - a[0], b[1] - a[1]); }
+  if (c.type === "diameter") return byId.get(R[0].e).d;
+  if (c.type === "fix") return pt(R[0]);
+  return null;
+}
+function addConstraint(type, refs) {
+  const f = feat(st.editSketch); if (!f) return;
+  const c = { id: newId("c"), type, refs: refs.map((r) => ({ e: r.e, k: r.k, kind: r.kind })) };
+  if (["length", "distance", "diameter"].includes(type)) c.value = String(Math.round(measureOf(c, f) * 100) / 100);
+  if (type === "fix") c.at = measureOf(c, f).slice(0, 2);
+  mutate(() => { f.constraints = f.constraints || []; f.constraints.push(c); solveAndWrite(f); });
+  const ok = sketcher.evaluated() && sketcher.solveState?.ok !== false;
+  if (!ok) toast("Cette contrainte entre en conflit avec les autres. Annule-la (Ctrl+Z) ou retire une autre contrainte.");
+  renderProps(); sketcher.render();
+}
+function constraintPanel(f) {
+  const out = [];
+  const subs = sketcher.subs || [];
+  const segs = subs.filter((r) => r.kind === "seg"), pts = subs.filter((r) => r.kind === "pt"), circs = subs.filter((r) => r.kind === "circ");
+  const btns = [];
+  const B = (type, refs, label) => btns.push(h("button", { class: "btn", title: C_LABELS[type], onclick: () => addConstraint(type, refs) }, h("b", { style: "color:#7a3fd1" }, C_GLYPH[type] + " "), label || C_LABELS[type]));
+  if (segs.length === 1 && !pts.length && !circs.length) { B("horizontal", segs); B("vertical", segs); B("length", segs, "Cote de longueur"); }
+  if (segs.length === 2 && !pts.length) {
+    B("parallel", segs); B("perpendicular", segs); B("equal", segs, "Même longueur");
+    if (segs[0].e === segs[1].e) B("tangent", segs);
+  }
+  if (circs.length === 1 && subs.length === 1) B("diameter", circs, "Cote de diamètre");
+  if (circs.length === 2 && subs.length === 2) { B("equal", circs, "Même diamètre"); B("coincident", circs.map((c) => ({ e: c.e, k: "c", kind: "pt" })), "Concentriques"); }
+  if (pts.length === 1 && subs.length === 1 && pts[0].e !== "origin") { B("fix", pts); B("onH", pts); B("onV", pts); B("coincident", [pts[0], { e: "origin", kind: "pt" }], "Sur l’origine"); }
+  if (pts.length === 2 && subs.length === 2) { B("coincident", pts); B("distance", pts, "Cote de distance"); B("hAlign", pts); B("vAlign", pts); B("symV", pts); B("symH", pts); }
+  out.push(h("h2", {}, "Contraintes"));
+  const stt = sketcher.solveState;
+  const nC = (f.constraints || []).length;
+  if (stt && nC) out.push(h("div", { class: "dof" + (!stt.ok ? " bad" : stt.dof === 0 ? " full" : "") }, !stt.ok ? "Contraintes incompatibles : retire la dernière." : stt.dof === 0 ? "Esquisse entièrement contrainte." : `Encore ${stt.dof} degré(s) de liberté.`));
+  if (btns.length) out.push(h("div", { class: "cbtns" }, btns));
+  else out.push(h("div", { class: "param-empty" }, subs.length ? "Aucune contrainte possible pour cette sélection." : "Clique sur un côté, un point ou un cercle (Maj+clic pour en choisir plusieurs) pour proposer des contraintes."));
+  const list = h("div", { class: "clist" });
+  const name = (r) => { if (r.e === "origin") return "origine"; const e = f.entities.find((x) => x.id === r.e); const base = ENT_LABELS[e?.type] || "?"; if (r.kind === "seg") return `${base}, côté ${r.k + 1}`; if (r.kind === "pt") return typeof r.k === "number" ? `${base}, point ${r.k + 1}` : `${base}, centre`; return base; };
+  for (const c of f.constraints || []) {
+    list.append(h("div", { class: "citem", title: (c.refs || []).map(name).join(" + ") },
+      h("span", { class: "g" }, C_GLYPH[c.type] || "?"),
+      h("span", {}, C_LABELS[c.type]),
+      c.value !== undefined ? h("input", { value: c.value, "aria-label": "Valeur", oninput: (e) => mutate(() => { c.value = e.target.value; solveAndWrite(f); }, true), onchange: () => { pushHistory(); renderProps(); } }) : h("span"),
+      h("button", { class: "x", title: "Retirer", onclick: () => { mutate(() => { f.constraints = f.constraints.filter((x) => x !== c); }); renderProps(); sketcher.render(); } }, "✕")));
+  }
+  out.push(list);
+  return out;
+}
+
 // ---------- Mode esquisse ----------
 const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["poly", "Contour libre"], ["path", "Chemin"]];
 const SK_HINTS = {
@@ -783,7 +849,7 @@ function renderSketchProps(P) {
       e.pts.forEach((p, i) => {
         const mk = (j) => h("input", { value: p[j], "aria-label": j ? "Y" : "X", oninput: (ev) => mutate(() => { p[j] = ev.target.value; }, true), onchange: () => pushHistory() });
         const mk3 = h("input", { value: p[2] ?? "", placeholder: "0", title: "Flèche : courbe le côté qui part de ce point (0 = droit)", oninput: (ev) => mutate(() => { p[2] = ev.target.value; }, true), onchange: () => pushHistory() });
-        box.append(h("div", { class: "pt pt3" }, String(i + 1), mk(0), mk(1), mk3, h("button", { class: "x", title: "Retirer ce point", onclick: () => { if (e.pts.length <= (e.type === "path" ? 2 : 3)) { toast("Il n’y a pas assez de points."); return; } mutate(() => e.pts.splice(i, 1)); renderProps(); } }, "✕")));
+        box.append(h("div", { class: "pt pt3" }, String(i + 1), mk(0), mk(1), mk3, h("button", { class: "x", title: "Retirer ce point", onclick: () => { if (e.pts.length <= (e.type === "path" ? 2 : 3)) { toast("Il n’y a pas assez de points."); return; } mutate(() => { e.pts.splice(i, 1); f.constraints = (f.constraints || []).filter((c) => (c.refs || []).every((r) => r.e !== e.id)); }); renderProps(); } }, "✕")));
       });
       P.append(box);
     }
@@ -792,6 +858,7 @@ function renderSketchProps(P) {
       h("button", { class: "btn", onclick: () => { const c = JSON.parse(JSON.stringify(e)); c.id = newId("e"); const off = (k) => { const n = Number(String(c[k]).replace(",", ".")); if (isFinite(n)) c[k] = String(n + 5); }; ["cx", "x1", "x2"].forEach(off); ["cy", "y1", "y2"].forEach(off); if (c.pts) c.pts = c.pts.map((q) => q.map((v, k) => { const n = Number(v); return k < 2 && isFinite(n) ? String(n + 5) : v; })); mutate(() => f.entities.push(c)); st.skSel = c.id; sketcher.sel = c.id; renderProps(); sketcher.render(); } }, "Dupliquer"),
       h("button", { class: "btn danger", onclick: () => sketcher.deleteSel() }, "Supprimer")));
   }
+  P.append(...constraintPanel(f));
   P.append(h("h2", {}, `Formes (${ents.length})`));
   const list = h("div", { class: "ents" });
   ents.forEach((x) => list.append(h("div", { class: "feat" + (x.id === st.skSel ? " sel" : ""), onclick: () => { st.skSel = x.id; sketcher.sel = x.id; sketcher.setTool("select"); renderProps(); sketcher.render(); } }, h("span", { class: "ic", html: ICONS[x.type] }), h("span", { class: "nm" }, ENT_LABELS[x.type] + (x.construction ? " (construction)" : "")))));
@@ -997,7 +1064,14 @@ const viewer = new Viewer($("#view"));
 sketcher = new Sketcher($("#skSvg"), {
   getSketch: () => feat(st.editSketch) || { entities: [] },
   getDoc: () => doc,
-  update: (fn, transient) => mutate(() => { const f = feat(st.editSketch); if (f) fn(f); }, transient),
+  update: (fn, transient) => mutate(() => { const f = feat(st.editSketch); if (f) { fn(f); solveAndWrite(f); } }, transient),
+  drag: (ref, at) => mutate(() => {
+    const f = feat(st.editSketch); if (!f) return;
+    const ent = f.entities.find((x) => x.id === ref.e); if (!ent) return;
+    const q = ent.pts[ref.k]; const old = [...q];
+    ent.pts[ref.k] = q[2] !== undefined && q[2] !== "" ? [at[0], at[1], q[2]] : [at[0], at[1]];
+    if (f.constraints?.length && !solveAndWrite(f, [{ ref, at }])) ent.pts[ref.k] = old;
+  }, true),
   select: (id) => { st.skSel = id; renderProps(); },
   onTool: () => renderSketchTools(),
 });
@@ -1034,7 +1108,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); return; }
   if (typing) return;
   if (e.key === "Escape") {
-    if (st.editSketch) { if (!sketcher.cancel()) { st.skSel = null; sketcher.sel = null; renderProps(); sketcher.render(); } return; }
+    if (st.editSketch) { if (!sketcher.cancel()) { st.skSel = null; sketcher.sel = null; sketcher.subs = []; renderProps(); sketcher.render(); } return; }
     if (st.pick) { stopPick(true); return; }
     if (viewer.pickMode) { viewer.setPick(null); banner(null); return; }
     select(null); return;
@@ -1063,5 +1137,5 @@ if (saved && Array.isArray(saved.features) && (saved.features.length || saved.pa
 else { loadDoc(emptyDoc()); welcome(true); }
 typoTree(document.body);
 startWorker();
-window.gabarit = { get doc() { return doc; }, st, viewer, loadDoc, exampleDoc };
+window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, exampleDoc };
 if ("launchQueue" in window) window.launchQueue.setConsumer(async (p) => { for (const fh of p.files || []) openFile(await fh.getFile()); });

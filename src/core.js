@@ -1,6 +1,7 @@
 // Reconstruction du modèle à partir de l'historique (exécuté dans un Worker).
 import * as R from "replicad";
 import { evalExpr, varsMap } from "./expr.js";
+import { solveSketch } from "./constraints.js";
 import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, toWorld, cross, dot, norm } from "./geo.js";
 
 let lastShape = null;
@@ -165,7 +166,9 @@ export async function build(doc, opts = {}) {
     try {
       if (f.type === "sketch") {
         const pl = P(f.plane);
-        const ents = (f.entities || []).map((e) => { const o = evalEntity(e, vars); checkEntity(o); return o; });
+        const ents = (f.entities || []).map((e) => evalEntity(e, vars));
+        if (f.constraints?.length) { const sr = solveSketch(ents, f.entities, f.constraints, vars); if (!sr.ok) info[f.id] = { conflict: true }; }
+        ents.forEach(checkEntity);
         sketches[f.id] = { pl, ents };
         continue;
       }
