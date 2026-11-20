@@ -2050,7 +2050,7 @@ function welcome(show) {
             h("span", { class: "si", html: ICONS[t.icon] }), h("b", {}, t.title), h("small", {}, t.sub))))),
         h("div", { class: "starters defis" }, h("h2", {}, "Mini-défis pour débuter (2 minutes chacun)"),
           h("div", { class: "sgrid3" }, CHALLENGES.map((c) => h("button", { class: "starter" + (defisDone().includes(c.key) ? " done" : ""), "data-defi": c.key, title: c.sub, onclick: () => go(() => startChallenge(c)) },
-            h("span", { class: "si", html: ICONS[c.icon] }), h("b", {}, c.title), h("small", {}, defisDone().includes(c.key) ? "Réussi" : c.sub))))),
+            h("span", { class: "si", html: ICONS[c.icon] }), h("b", {}, c.title.replace(/-/g, "-\u2060")), h("small", {}, defisDone().includes(c.key) ? "Réussi" : c.sub))))),
         names.length ? h("div", { class: "recents" }, h("h2", {}, "Mes pièces"),
           ...names.map((n) => h("div", { class: "rec" },
             h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => openTab(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
