@@ -5,7 +5,7 @@ const { chromium } = require("playwright");
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message + e.stack)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   const G = (fn) => p.evaluate(fn);
   const idle = () => p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 60000 });
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   await p.waitForFunction(() => window.gabarit && document.querySelector("#welcome"), null, { timeout: 60000 });
   // nouvelle pièce vide
   await p.click("text=Nouvelle pièce"); await p.waitForTimeout(500);

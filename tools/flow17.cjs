@@ -6,7 +6,7 @@ const { chromium } = require("playwright");
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message + e.stack)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   const ok = (c, m) => { console.log((c ? "OK   " : "FAIL ") + m); if (!c) process.exitCode = 1; };
   const idle = () => p.waitForFunction(() => window.gabarit.st.mesh !== undefined && !window.gabarit.st.building, null, { timeout: 60000 });
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   await p.click("text=Nouvelle pièce"); await p.waitForTimeout(400); await p.evaluate(() => document.querySelector("#dlg")?.close());
   // esquisse avec deux cercles qui se croisent
   await p.evaluate(() => window.gabarit.loadDoc({ version: 1, name: "Zones", material: "pla", params: [], features: [{ id: "s1", type: "sketch", name: "Esquisse 1", plane: { kind: "std", name: "dessus", offset: "0" }, entities: [{ id: "c1", type: "circle", cx: "0", cy: "0", d: "20" }, { id: "c2", type: "circle", cx: "12", cy: "0", d: "20" }] }] }));

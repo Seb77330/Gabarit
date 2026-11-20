@@ -7,7 +7,7 @@ const { chromium } = require("playwright");
   const ok = (c, m) => { console.log((c ? "OK   " : "FAIL ") + m); if (!c) process.exitCode = 1; };
   const idle = async () => { await p.waitForTimeout(300); await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 120000 }); await p.waitForTimeout(300); };
   const bb = () => p.evaluate(() => window.gabarit.st.mesh.bb.map((v) => v.map((x) => Math.round(x * 100) / 100)));
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   await p.click("text=Nouvelle pièce"); await p.waitForTimeout(400); await p.evaluate(() => document.querySelector("#dlg")?.close());
   await p.setInputFiles("#fileIn", "tools/fixtures/support.3mf");
   await p.waitForFunction(() => window.gabarit.doc.features.length, null, { timeout: 20000 }); await idle();

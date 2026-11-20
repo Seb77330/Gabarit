@@ -3,3 +3,4 @@ Gabarit utilise ces logiciels libres :
 - replicad et replicad-opencascadejs (Steve Genoud), licences MIT et LGPL 2.1 — https://replicad.xyz
 - three.js, licence MIT — https://threejs.org
 - Police DejaVu Sans Bold (sous-ensemble latin) pour le texte des esquisses, licence Bitstream Vera / DejaVu (libre) — https://dejavu-fonts.github.io
+- Police Figtree (Erik Kennedy) pour l’interface, licence SIL Open Font 1.1 — https://github.com/erikdkennedy/figtree

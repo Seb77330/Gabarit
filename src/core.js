@@ -220,6 +220,79 @@ function sketchDrawing(ents, regions) {
   return acc;
 }
 
+// ---------- Formes prêtes (boîte, cylindre, sphère…) ----------
+// Chaque forme est construite posée sur sa base (centre de la base à l'origine, axe vers +Z),
+// puis orientée (rx, ry, rz autour de ce point) et déplacée en (x, y, z).
+const XZ = { origin: [0, 0, 0], x: [1, 0, 0], n: [0, -1, 0] };
+function readyShape(f, vars) {
+  const val = (k, d) => (f[k] === undefined || f[k] === "" ? d : evalExpr(f[k], vars));
+  const pos = (k, d, label) => { const x = val(k, d); if (!(x > 0)) throw new Error(`${label} : il faut une valeur plus grande que 0`); return x; };
+  const up = (d, h) => d.sketchOnPlane("XY").extrude(h);
+  const turn = (d) => d.sketchOnPlane(rPlane(XZ)).revolve([0, 0, 1], { origin: [0, 0, 0] });
+  const poly = (pts) => { let pen = R.draw(pts[0]); for (let i = 1; i < pts.length; i++) pen = pen.lineTo(pts[i]); return pen.close(); };
+  let s;
+  const k = f.kind || "box";
+  if (k === "box") {
+    const a = pos("a", 40, "Longueur"), b = pos("b", 30, "Largeur"), h = pos("h", 20, "Hauteur"), r = Math.min(val("r", 0), Math.min(a, b) / 2 - 0.01);
+    s = up(r > 0 ? R.drawRoundedRectangle(a, b, r) : R.drawRectangle(a, b), h);
+  } else if (k === "cyl") {
+    s = up(R.drawCircle(pos("d", 30, "Diamètre") / 2), pos("h", 30, "Hauteur"));
+  } else if (k === "tube") {
+    const d = pos("d", 30, "Diamètre"), t = pos("t", 3, "Épaisseur de la paroi"), h = pos("h", 30, "Hauteur");
+    if (t >= d / 2) throw new Error("La paroi est plus épaisse que le rayon du tube");
+    s = up(R.drawCircle(d / 2).cut(R.drawCircle(d / 2 - t)), h);
+  } else if (k === "prism") {
+    const n = Math.round(val("n", 6)); if (!(n >= 3 && n <= 60)) throw new Error("Le nombre de côtés doit être entre 3 et 60");
+    s = up(R.drawPolysides(pos("d", 30, "Diamètre") / 2, n).rotate(-90, [0, 0]), pos("h", 20, "Hauteur"));
+  } else if (k === "sphere") {
+    const r = pos("d", 30, "Diamètre") / 2;
+    s = R.makeSphere(r).translate([0, 0, r]);
+  } else if (k === "cone") {
+    const r1 = pos("d", 30, "Diamètre du bas") / 2, r2 = Math.max(0, val("d2", 0)) / 2, h = pos("h", 30, "Hauteur");
+    s = turn(poly(r2 > 0.001 ? [[0, 0], [r1, 0], [r2, h], [0, h]] : [[0, 0], [r1, 0], [0, h]]));
+  } else if (k === "torus") {
+    const d = pos("d", 40, "Diamètre"), t = pos("t", 10, "Grosseur");
+    if (t >= d / 2) throw new Error("L’anneau est trop gros pour son diamètre : il n’y a plus de trou au milieu");
+    s = turn(R.drawCircle(t / 2).translate(d / 2 - t / 2, t / 2));
+  } else if (k === "wedge") {
+    const a = pos("a", 40, "Longueur"), b = pos("b", 30, "Largeur"), h = pos("h", 20, "Hauteur");
+    s = poly([[-a / 2, 0], [a / 2, 0], [-a / 2, h]]).sketchOnPlane(rPlane(XZ)).extrude(b).translate([0, b / 2, 0]);
+  } else if (k === "star") {
+    const n = Math.round(val("n", 5)); if (!(n >= 3 && n <= 40)) throw new Error("Le nombre de branches doit être entre 3 et 40");
+    const R1 = pos("d", 40, "Diamètre") / 2, R2 = R1 * Math.min(0.95, Math.max(0.1, val("q", 45) / 100));
+    const pts = []; for (let i = 0; i < 2 * n; i++) { const a = Math.PI / 2 + (i * Math.PI) / n, r = i % 2 ? R2 : R1; pts.push([r * Math.cos(a), r * Math.sin(a)]); }
+    s = up(poly(pts), pos("h", 5, "Épaisseur"));
+  } else if (k === "heart") {
+    const W = pos("a", 40, "Largeur"), c = W / (1 + Math.SQRT2);
+    const d = R.draw([0, 0]).lineTo([c, c]).threePointsArcTo([0, 2 * c], [c, 2 * c]).threePointsArcTo([-c, c], [-c, 2 * c]).close();
+    s = up(d.translate(0, -c * 1.1), pos("h", 5, "Épaisseur"));
+  } else if (k === "gear") {
+    const n = Math.round(val("n", 16)); if (!(n >= 6 && n <= 120)) throw new Error("Le nombre de dents doit être entre 6 et 120");
+    const m = pos("m", 2, "Taille des dents"), h = pos("h", 6, "Épaisseur"), bore = Math.max(0, val("d", 5));
+    const Rp = (m * n) / 2, Rt = Rp + m, Rr = Rp - 1.25 * m, hp = Math.PI / (2 * n);
+    if (bore >= 2 * Rr - 1) throw new Error("Le trou du centre est trop grand pour cet engrenage");
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const a = (2 * Math.PI * i) / n;
+      for (const [r, da] of [[Rr, -hp * 1.45], [Rp, -hp], [Rt, -hp * 0.48], [Rt, hp * 0.48], [Rp, hp], [Rr, hp * 1.45]]) pts.push([r * Math.cos(a + da), r * Math.sin(a + da)]);
+    }
+    let d = poly(pts); if (bore > 0) d = d.cut(R.drawCircle(bore / 2));
+    s = up(d, h);
+  } else if (k === "text") {
+    const txt = String(f.txt ?? "Gabarit").trim(); if (!txt) throw new Error("Écris un texte");
+    let d = R.drawText(txt, { startX: 0, startY: 0, fontSize: pos("s", 12, "Taille des lettres") / 0.73, fontFamily: "gabarit" });
+    const [lo, hi] = d.boundingBox.bounds;
+    s = up(d.translate(-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2), pos("h", 3, "Épaisseur"));
+  } else throw new Error("Forme inconnue");
+  const rot = [val("rx", 0), val("ry", 0), val("rz", 0)];
+  if (rot[0]) s = s.rotate(rot[0], [0, 0, 0], [1, 0, 0]);
+  if (rot[1]) s = s.rotate(rot[1], [0, 0, 0], [0, 1, 0]);
+  if (rot[2]) s = s.rotate(rot[2], [0, 0, 0], [0, 0, 1]);
+  const t = [val("x", 0), val("y", 0), val("z", 0)];
+  if (t.some(Boolean)) s = s.translate(t);
+  return s;
+}
+
 function sizeOf(shape) {
   if (!shape) return 100;
   const bb = shape.boundingBox; const [a, b] = bb.bounds;
@@ -352,7 +425,7 @@ async function stlSolid(blob) {
   return s;
 }
 export async function build(doc, opts = {}) {
-  if (doc.features.some((f) => f.type === "sketch" && (f.entities || []).some((e) => e.type === "text"))) await ensureFont();
+  if (doc.features.some((f) => (f.type === "sketch" && (f.entities || []).some((e) => e.type === "text")) || (f.type === "shape" && f.kind === "text"))) await ensureFont();
   const vars = varsMap(doc.params);
   const errors = {}, sketches = {}, info = {}, tools = {};
   let shape = null;
@@ -495,6 +568,8 @@ export async function build(doc, opts = {}) {
           for (const tr of trs) acc = acc.fuse(tr(base.clone()));
           shape = acc;
         }
+      } else if (f.type === "shape") {
+        apply(readyShape(f, vars), f.mode || "add", f.id);
       } else if (f.type === "import") {
         if (!f.data) throw new Error("Aucun fichier importé");
         // étirement dans une seule direction (X, Y ou Z) : appliqué au maillage avant conversion

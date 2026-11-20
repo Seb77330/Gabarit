@@ -91,21 +91,23 @@ export class Sketcher {
     let best = null, bd = tol;
     const consider = (ref, d) => { if (d < bd) { bd = d; best = ref; } };
     const dSeg = (pts) => { let m = Infinity; for (let i = 0; i + 1 < pts.length; i++) { const a = pts[i], b = pts[i + 1]; const dx = b[0] - a[0], dy = b[1] - a[1]; const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1))); m = Math.min(m, Math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1])); } return m; };
-    consider({ e: "origin", kind: "pt" }, Math.hypot(p[0], p[1]) * 0.7);
+    // un point à moins de 4 px du clic passe toujours avant le trait qui y arrive
+    const dp = (x, y, w = 0.6) => { const d = Math.hypot(x - p[0], y - p[1]); return d * this.zoom < 4 ? d * w - 4 / this.zoom : d * w; };
+    consider({ e: "origin", kind: "pt" }, dp(0, 0, 0.7));
     for (const o of this.evaluated()) {
       if (o.type === "poly" || o.type === "path") {
-        o.pts.forEach((q, i) => consider({ e: o.id, k: i, kind: "pt" }, Math.hypot(q[0] - p[0], q[1] - p[1]) * 0.6));
+        o.pts.forEach((q, i) => consider({ e: o.id, k: i, kind: "pt" }, dp(q[0], q[1])));
         const n = o.pts.length;
         for (let i = 0; i < (o.type === "path" ? n - 1 : n); i++) { const a = o.pts[i], b = o.pts[(i + 1) % n]; consider({ e: o.id, k: i, kind: "seg" }, dSeg(segPts([a, b], false).concat([[b[0], b[1]]]))); }
       } else if (o.type === "spline") {
-        o.pts.forEach((q, i) => consider({ e: o.id, k: i, kind: "pt" }, Math.hypot(q[0] - p[0], q[1] - p[1]) * 0.6));
+        o.pts.forEach((q, i) => consider({ e: o.id, k: i, kind: "pt" }, dp(q[0], q[1])));
         const ol = outline(o); consider({ e: o.id, kind: "ent" }, dSeg(o.closed ? ol.concat([ol[0]]) : ol));
       } else if (o.type === "slot") {
-        consider({ e: o.id, k: 0, kind: "pt" }, Math.hypot(o.x1 - p[0], o.y1 - p[1]) * 0.6);
-        consider({ e: o.id, k: 1, kind: "pt" }, Math.hypot(o.x2 - p[0], o.y2 - p[1]) * 0.6);
+        consider({ e: o.id, k: 0, kind: "pt" }, dp(o.x1, o.y1));
+        consider({ e: o.id, k: 1, kind: "pt" }, dp(o.x2, o.y2));
         const ol = outline(o); consider({ e: o.id, kind: "ent" }, dSeg(ol.concat([ol[0]])));
       } else {
-        consider({ e: o.id, k: "c", kind: "pt" }, Math.hypot(o.cx - p[0], o.cy - p[1]) * 0.6);
+        consider({ e: o.id, k: "c", kind: "pt" }, dp(o.cx, o.cy));
         if (o.type !== "point") { const ol = outline(o); consider({ e: o.id, kind: o.type === "circle" || o.type === "polygon" ? "circ" : "ent" }, dSeg(ol.concat([ol[0]]))); }
       }
     }

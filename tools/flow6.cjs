@@ -3,7 +3,7 @@ const { chromium } = require("playwright");
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
   const p = await b.newPage({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message + e.stack)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   const G = (fn, a) => p.evaluate(fn, a);
   await G(() => {
     const g = window.gabarit;
@@ -70,7 +70,7 @@ const { chromium } = require("playwright");
   await p.reload(); await p.waitForFunction(() => window.gabarit.viewer.asm?.size === 2, null, { timeout: 90000 });
   console.log("reload ok", await G(() => window.gabarit.doc.kind));
   // retour à une pièce
-  await p.click("[data-act=new]"); await p.click("#dlg .planes button >> nth=0");
+  await p.click("#welcome >> text=Nouvelle pièce"); await p.click("#dlg .planes button >> nth=0");
   await p.waitForTimeout(500);
   console.log("part mode", await G(() => [window.gabarit.doc.kind, !!window.gabarit.viewer.asm, document.querySelectorAll(".tbtn").length]));
   await p.keyboard.press("Escape");

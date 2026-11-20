@@ -9,6 +9,8 @@ await esbuild.build({ ...common, entryPoints: ["src/app.js"], outfile: "dist/app
 await esbuild.build({ ...common, entryPoints: ["src/worker.js"], outfile: "dist/worker.js", format: "iife", platform: "browser", external: ["node:*"], define: { "import.meta.url": "self.location.href" }, logLevel: "error" });
 for (const f of ["index.html", "style.css", "icon.svg", "manifest.webmanifest", "icon-192.png", "icon-512.png"]) if (fs.existsSync("web/" + f)) fs.copyFileSync("web/" + f, "dist/" + f);
 fs.copyFileSync("node_modules/replicad-opencascadejs/dist/replicad_single.wasm", "dist/occt.wasm");
+const FONT_UI = "node_modules/@fontsource-variable/figtree/files/figtree-latin-wght-normal.woff2";
+fs.copyFileSync(FONT_UI, "dist/figtree.woff2");
 fs.writeFileSync("dist/sw.js", fs.readFileSync("web/sw.js", "utf8").replace("__VERSION__", VERSION + "-" + Date.now().toString(36)));
 // index.html : script classique (bundle iife)
 let html = fs.readFileSync("dist/index.html", "utf8").replace('<script type="module" src="app.js"></script>', '<script src="app.js" defer></script>');
@@ -16,7 +18,7 @@ fs.writeFileSync("dist/index.html", html);
 fs.writeFileSync("dist/LICENSES.txt", fs.readFileSync("web/LICENSES.txt", "utf8"));
 // Version autonome
 fs.mkdirSync("dist-standalone", { recursive: true });
-const css = fs.readFileSync("dist/style.css", "utf8");
+const css = fs.readFileSync("dist/style.css", "utf8").replace('url("figtree.woff2")', `url("data:font/woff2;base64,${fs.readFileSync(FONT_UI).toString("base64")}")`);
 const app = fs.readFileSync("dist/app.js", "utf8");
 const wk = fs.readFileSync("dist/worker.js", "utf8");
 const wasmGz = zlib.gzipSync(fs.readFileSync("dist/occt.wasm"), { level: 9 }).toString("base64");

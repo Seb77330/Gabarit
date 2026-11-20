@@ -130,6 +130,7 @@ export function createExtras(ctx) {
     bar.append(h("b", {}, "Impression 3D"), h("span", { class: "legend" }, h("i", { style: "background:#5cb873" }), "posé ", h("i", { style: "background:#ee9940" }), "limite ", h("i", { style: "background:#db403a" }), "support"), info,
       h("button", { class: "btn", onclick: () => { const g = best(); ctx.setPrintDown(g); apply(g); toast("Orientation choisie : le moins de supports possible. Elle sera utilisée pour l’export STL et 3MF."); } }, "Poser à plat automatiquement"),
       h("button", { class: "btn", onclick: () => { ctx.setPrintDown(null); apply([0, 0, -1]); } }, "Orientation d’origine"),
+      h("button", { class: "btn primary", title: "Fichiers 3MF et STL, 4 images et une fiche, prêts à déposer sur un site de modèles 3D (MakerWorld, Printables…)", onclick: () => ctx.publish() }, "Pack de publication"),
       h("button", { class: "btn", onclick: closePrint }, "Fermer"));
     $(".stage").append(bar); apply(g0);
   }

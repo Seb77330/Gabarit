@@ -5,7 +5,7 @@ const { chromium } = require("playwright");
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message + e.stack)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   const G = (fn) => p.evaluate(fn);
   const idle = () => p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 60000 });
-  await p.goto("http://localhost:8765/"); await p.click("text=Voir l’exemple");
+  await p.goto("http://localhost:8765/?mode=expert"); await p.click("text=Voir l’exemple");
   await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 60000 }); await p.waitForTimeout(600);
   await p.screenshot({ path: "/tmp/claude-0/shots/90-home.png" });
   // cube : vue de dessus

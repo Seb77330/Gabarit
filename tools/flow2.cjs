@@ -5,7 +5,7 @@ const { chromium } = require("playwright");
   const logs = [];
   p.on("console", (m) => { if (m.type() === "error") logs.push("console: " + m.text()); });
   p.on("pageerror", (e) => logs.push("pageerror: " + e.message + "\n" + e.stack));
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   await p.click("text=Voir l’exemple");
   await p.waitForFunction(() => window.gabarit.st.mesh, null, { timeout: 60000 });
   const wait = async () => { await p.waitForTimeout(400); await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 60000 }); await p.waitForTimeout(200); };
