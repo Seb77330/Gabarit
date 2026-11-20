@@ -15,6 +15,8 @@ export class Viewer {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true; this.controls.dampingFactor = 0.15;
     this.controls.screenSpacePanning = true;
+    // souris : molette = zoom, clic molette (ou clic gauche) = tourner, Ctrl + molette cliquée ou clic droit glissé = déplacer
+    this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.6));
     const d1 = new THREE.DirectionalLight(0xffffff, 1.4); d1.position.set(1, -1.5, 2); this.camera.add(d1);
     const d2 = new THREE.DirectionalLight(0xffffff, 0.5); d2.position.set(-2, 1, -1); this.camera.add(d2);
@@ -38,14 +40,17 @@ export class Viewer {
     new ResizeObserver(() => this.resize()).observe(host);
     const el = this.renderer.domElement;
     let down = null;
-    el.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; });
+    el.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY, e.button]; });
     el.addEventListener("pointermove", (e) => this.onMove(e));
-    el.addEventListener("pointerup", (e) => { if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 5) this.onClick(e); down = null; });
+    el.addEventListener("pointerup", (e) => {
+      if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 5) { if (down[2] === 2) this.onContext?.(e); else if (down[2] === 0) this.onClick(e); }
+      down = null;
+    });
     el.addEventListener("pointerleave", () => this.clearHover());
     this.sketchCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100000);
     this.sketchCam.add(d1.clone(), d2.clone()); this.scene.add(this.sketchCam);
     this.sketchView = null;
-    const loop = () => { if (!this.sketchView) this.controls.update(); this.renderer.render(this.scene, this.sketchView ? this.sketchCam : this.camera); requestAnimationFrame(loop); };
+    const loop = () => { if (!this.sketchView) this.controls.update(); this.renderer.render(this.scene, this.sketchView ? this.sketchCam : this.camera); this.updateCube(); requestAnimationFrame(loop); };
     loop();
   }
   resize() {
@@ -185,6 +190,27 @@ export class Viewer {
         const geo = this.faceGeometry(h.faceId); if (geo) { this.hoverObj = new THREE.Mesh(geo, this.hoverMat); this.part.add(this.hoverObj); }
       }
     }
+  }
+  // Cube d'orientation (CSS 3D) : suit la caméra, un clic sur une face oriente la vue.
+  mountCube(container, onPick) {
+    const wrap = document.createElement("div"); wrap.className = "vcube";
+    const cube = document.createElement("div"); cube.className = "vc"; wrap.append(cube);
+    const F = [["Dessus", [0, 0, 1], "translateZ(36px)"], ["Dessous", [0, 0, -1], "rotateY(180deg) translateZ(36px)"],
+      ["Face", [0, -1, 0], "rotateX(-90deg) translateZ(36px)"], ["Arrière", [0, 1, 0], "rotateZ(180deg) rotateX(-90deg) translateZ(36px)"],
+      ["Droite", [1, 0, 0], "rotateZ(-90deg) rotateX(-90deg) translateZ(36px)"], ["Gauche", [-1, 0, 0], "rotateZ(90deg) rotateX(-90deg) translateZ(36px)"]];
+    for (const [name, dir, tr] of F) {
+      const f = document.createElement("button"); f.className = "vf"; f.textContent = name; f.style.transform = tr; f.title = "Vue de " + name.toLowerCase();
+      f.addEventListener("click", () => onPick(dir)); cube.append(f);
+    }
+    container.prepend(wrap); this.cubeEl = cube;
+    this._m = new THREE.Matrix4(); this._s = new THREE.Matrix4().makeScale(1, -1, 1);
+  }
+  updateCube() {
+    if (!this.cubeEl || !this.cubeEl.isConnected) return;
+    const cam = this.sketchView ? this.sketchCam : this.camera; cam.updateMatrixWorld();
+    const m = this._m.extractRotation(cam.matrixWorldInverse).premultiply(this._s).multiply(this._s);
+    const key = m.elements.map((v) => v.toFixed(4)).join(",");
+    if (key !== this._cubeKey) { this._cubeKey = key; this.cubeEl.style.transform = `translateZ(-60px) matrix3d(${key})`; }
   }
   // Vue d'esquisse : caméra orthogonale face au plan, calée sur le zoom de l'éditeur 2D.
   // v = { pl: {origin,x,y,n}, cu, cv, zoom } (cu, cv = point du plan au centre de la vue ; zoom = pixels par mm)

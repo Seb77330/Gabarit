@@ -24,7 +24,7 @@ const { chromium } = require("playwright");
   await p.click(".tbtn[data-tool=shell]"); await p.waitForTimeout(1000);
   const q = await p.evaluate(() => { const v = window.gabarit.viewer; const V = v.camera.position.constructor; const [a, b] = v.data.bb; const P = new V((a[0]+b[0])/2*0.0+ (b[0]*0.6), 0, b[2]); P.project(v.camera); const r = v.renderer.domElement.getBoundingClientRect(); return [r.left + (P.x + 1) / 2 * r.width, r.top + (1 - P.y) / 2 * r.height]; });
   await p.mouse.move(q[0], q[1]); await p.mouse.click(q[0], q[1]); await p.waitForTimeout(300);
-  await p.click("#banner >> text=Valider"); await p.waitForTimeout(400);
+  await p.click("#corner .ok"); await p.waitForTimeout(400);
   await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 30000 }); await p.waitForTimeout(500);
   console.log("shell", JSON.stringify(await p.evaluate(() => [window.gabarit.doc.features.at(-1).faces, window.gabarit.st.errors, window.gabarit.st.mesh.volume])));
   await p.screenshot({ path: "/tmp/claude-0/shots/12-shell.png" });
