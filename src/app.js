@@ -1451,6 +1451,7 @@ function saveFile() {
 async function openFile(file) {
   if (MESH_EXT.test(file.name)) {
     // fichier d'impression 3D ou de CAO : nouvelle pièce qui le reprend
+    const dlg = $("#dlg"); if (dlg?.open) dlg.close();
     if (isAsm() || doc.features.length) { save(); loadDoc(emptyDoc()); }
     doc.name = file.name.replace(/\.[^.]+$/, ""); $("#docName").value = doc.name;
     await importBlob(file); return;
