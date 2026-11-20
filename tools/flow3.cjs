@@ -4,7 +4,7 @@ const { chromium } = require("playwright");
   const p = await b.newPage({ viewport: { width: 1440, height: 860 } });
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   await p.goto("http://localhost:8765/");
-  await p.click("text=Commencer une pièce"); await p.click("text=Plan de face");
+  await p.click("text=Nouvelle pièce"); await p.click("text=Plan de face");
   const box = await p.locator("#skSvg").boundingBox(); const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
   await p.mouse.move(cx + 30, cy - 120); await p.mouse.down(); await p.mouse.move(cx + 120, cy + 60, { steps: 6 }); await p.mouse.up();
   const dim = p.locator("g.dim.edit").first(); const bb = await dim.boundingBox();

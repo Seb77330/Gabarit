@@ -271,3 +271,14 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .corner .ok:hover { background: #2f8a4a; color: #fff; }
 .corner .ko { color: var(--err); }
 .corner .ko:hover { background: #fdecea; }
+.welcome .card { max-width: 560px; width: 100%; }
+.welcome .recents { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 4px; max-height: 40vh; overflow: auto; }
+.welcome .recents h2 { margin: 10px 0 6px; }
+.welcome .rec { display: flex; align-items: center; gap: 6px; border-radius: 8px; }
+.welcome .rec:hover { background: var(--accent-soft); }
+.welcome .rec-open { flex: 1; text-align: left; background: none; border: 0; padding: 8px 10px; cursor: pointer; font-size: 14px; color: var(--ink); }
+.welcome .rec-open span { color: var(--muted); font-size: 12.5px; }
+.welcome .rec-del { background: none; border: 1px solid transparent; color: var(--err); border-radius: 7px; padding: 4px 9px; font-size: 12.5px; cursor: pointer; }
+.welcome .rec-del:hover { border-color: var(--err); background: #fdecea; }
+.status .ver { border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 0 4px; }
+.status .ver:hover { color: var(--accent); text-decoration: underline; }

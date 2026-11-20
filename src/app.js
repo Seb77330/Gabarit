@@ -90,7 +90,7 @@ const LIB = "gabarit-lib";
 function library() { try { return JSON.parse(localStorage.getItem(LIB) || "{}"); } catch { return {}; } }
 function addToLibrary(d) {
   if (!d || d.kind === "assembly" || !d.features?.length) return;
-  const lib = library(); lib[d.name || "Pièce sans nom"] = JSON.parse(JSON.stringify(d));
+  const lib = library(); lib[d.name || "Pièce sans nom"] = { ...JSON.parse(JSON.stringify(d)), savedAt: Date.now() };
   try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* stockage plein */ }
 }
 const feat = (id) => doc.features.find((f) => f.id === id);
@@ -1286,6 +1286,12 @@ function renderStatus() {
   if (errCount) s.append(h("span", { style: "color:var(--err)" }, `${errCount} étape(s) en erreur`));
   if (st.stopAt !== null) s.append(h("span", { style: "color:var(--blue)" }, "Historique remonté"));
   if (st.lastMs) s.append(h("span", {}, `Calcul ${nf(st.lastMs / 1000, 2)} s`));
+  s.append(h("button", { class: "ver", title: "Version installée. Clique pour chercher une mise à jour.", onclick: () => checkUpdate() }, `v${typeof GABARIT_VERSION === "string" ? GABARIT_VERSION : "?"}`));
+}
+async function checkUpdate() {
+  toast("Recherche d’une mise à jour…");
+  try { const r = await navigator.serviceWorker?.getRegistration(); await r?.update(); } catch { /* hors ligne */ }
+  setTimeout(() => { save(); location.reload(); }, 1200);
 }
 
 // ---------- Divers ----------
@@ -1299,18 +1305,40 @@ function layoutMode() {
 }
 function renderAll() { layoutMode(); if (isAsm()) { $("#docName").value = doc.name; asmUI.render(); return; } $("#docName").value = doc.name; renderTree(); renderParams(); renderProps(); renderStatus(); renderOverlay(); refreshMarkers(); }
 
+// Accueil au lancement : continuer, nouveau, ouvrir, ou gérer ses pièces récentes.
 function welcome(show) {
   const w = $("#welcome"); if (!show) { w.hidden = true; return; }
-  w.innerHTML = "";
-  w.append(h("div", { class: "card" },
-    h("h1", {}, "Bienvenue dans Gabarit"),
-    h("p", {}, "Ton atelier de conception 3D, gratuit et sans compte. Tu dessines un profil, tu lui donnes du volume, puis tu perces, arrondis et exportes pour l’impression 3D. Chaque étape reste modifiable."),
-    h("div", { class: "btnrow" },
-      h("button", { class: "btn primary", onclick: () => { welcome(false); loadDoc(emptyDoc()); toolAction("sketch"); } }, "Commencer une pièce"),
-      h("button", { class: "btn", onclick: () => { welcome(false); loadDoc(emptyAsm()); } }, "Commencer un assemblage"),
-      h("button", { class: "btn", onclick: () => { welcome(false); loadDoc(exampleDoc()); } }, "Voir l’exemple"),
-      h("button", { class: "btn", onclick: () => { welcome(false); $("#fileIn").click(); } }, "Ouvrir un fichier"))));
-  w.hidden = false;
+  const draw = () => {
+    w.innerHTML = "";
+    const lib = library();
+    const names = Object.keys(lib).sort((a, b) => (lib[b].savedAt || 0) - (lib[a].savedAt || 0) || a.localeCompare(b, "fr"));
+    const cur = (isAsm() || doc.features?.length) ? doc.name : null;
+    const go = (fn) => { welcome(false); fn(); };
+    w.append(h("div", { class: "card" },
+      h("h1", {}, "Gabarit"),
+      h("p", {}, "Ton atelier de conception 3D, gratuit et sans compte."),
+      h("div", { class: "btnrow" },
+        cur ? h("button", { class: "btn primary", onclick: () => go(() => {}) }, `Continuer : ${cur}`) : null,
+        h("button", { class: "btn" + (cur ? "" : " primary"), onclick: () => go(() => { loadDoc(emptyDoc()); toolAction("sketch"); }) }, "Nouvelle pièce"),
+        h("button", { class: "btn", onclick: () => go(() => loadDoc(emptyAsm())) }, "Nouvel assemblage"),
+        h("button", { class: "btn", onclick: () => go(() => $("#fileIn").click()) }, "Ouvrir un fichier"),
+        h("button", { class: "btn ghost", onclick: () => go(() => loadDoc(exampleDoc())) }, "Voir l’exemple")),
+      names.length ? h("div", { class: "recents" }, h("h2", {}, "Mes pièces"),
+        ...names.map((n) => h("div", { class: "rec" },
+          h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => loadDoc(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
+          h("button", { class: "rec-del", title: `Supprimer « ${n} »`, "aria-label": `Supprimer ${n}`, onclick: () => { if (!deletePart(n)) return; draw(); } }, "Supprimer")))) : null));
+    typoTree(w);
+  };
+  draw(); w.hidden = false;
+}
+// Supprime une pièce de « Mes pièces » ; si c'est celle ouverte, on repart d'une pièce vide.
+function deletePart(n) {
+  if (!confirm(fr(`Supprimer « ${n} » ? Elle disparaît de tes pièces (un fichier .gabarit enregistré ailleurs n’est pas touché).`))) return false;
+  const lib = library(); delete lib[n];
+  try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* */ }
+  if (!isAsm() && (doc.name || "Pièce sans nom") === n) { loadDoc(emptyDoc()); try { localStorage.removeItem(STORE); } catch { /* */ } }
+  toast(`« ${n} » supprimée.`);
+  return true;
 }
 function help() {
   const dlg = $("#dlg"); dlg.innerHTML = "";
@@ -1529,7 +1557,7 @@ function libraryDialog() {
     dlg.append(h("div", { class: "dh" }, "Mes pièces"), h("div", { class: "db" },
       names.length ? h("table", { class: "bom" }, names.map((n) => h("tr", {}, h("td", {}, h("b", {}, n)), h("td", {}, `${lib[n].features.length} étape(s)`),
         h("td", {}, h("button", { class: "btn", onclick: () => { dlg.close(); loadDoc(lib[n]); } }, "Ouvrir")),
-        h("td", {}, h("button", { class: "btn danger", onclick: () => { if (!confirm(fr(`Retirer « ${n} » de ta bibliothèque ?`))) return; delete lib[n]; try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* */ } draw(); } }, "Retirer")))))
+        h("td", {}, h("button", { class: "btn danger", onclick: () => { if (deletePart(n)) draw(); } }, "Supprimer")))))
         : h("p", {}, "Ta bibliothèque est vide. Chaque pièce que tu crées y est rangée automatiquement.")),
     h("div", { class: "df" }, h("button", { class: "btn primary", onclick: () => dlg.close() }, "Fermer")));
     typoTree(dlg);
@@ -1637,8 +1665,9 @@ if ("serviceWorker" in navigator && location.protocol === "https:" && !window.GA
 
 // Reprise du travail précédent
 let saved = null; try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch { saved = null; }
-if (saved && (saved.kind === "assembly" || (Array.isArray(saved.features) && (saved.features.length || saved.params?.length)))) loadDoc(saved);
-else { loadDoc(emptyDoc()); welcome(true); }
+const hasSaved = saved && (saved.kind === "assembly" || (Array.isArray(saved.features) && (saved.features.length || saved.params?.length)));
+if (hasSaved) loadDoc(saved); else loadDoc(emptyDoc());
+if (!location.hash.startsWith("#p=")) welcome(true);
 typoTree(document.body);
 startWorker();
 extras.openFromHash();

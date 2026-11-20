@@ -14,7 +14,7 @@ const { chromium } = require("playwright");
       { id: "s1", type: "sketch", name: "S", plane: { kind: "std", name: "face", offset: "0" }, entities: [{ id: "a", type: "circle", cx: "0", cy: "0", d: "8" }] },
       { id: "x1", type: "extrude", name: "E", sketch: "s1", mode: "add", dir: "normal", dist: "20" }] });
   });
-  await p.click("text=Commencer un assemblage");
+  await p.click("text=Nouvel assemblage");
   await p.click(".tbtn[data-tool=insert]"); await p.click("#dlg >> text=Platine");
   await p.waitForFunction(() => window.gabarit.viewer.asm?.size === 1, null, { timeout: 60000 });
   await p.click(".tbtn[data-tool=insert]"); await p.click("#dlg >> text=Axe");
