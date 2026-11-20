@@ -1,0 +1,17 @@
+{
+  "name": "Gabarit, conception 3D",
+  "short_name": "Gabarit",
+  "description": "Logiciel de conception 3D gratuit : esquisses, extrusions, perçages, congés, export STL et STEP.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#1d2733",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "file_handlers": [{ "action": "./", "accept": { "application/json": [".gabarit"] } }]
+}

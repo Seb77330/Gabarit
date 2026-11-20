@@ -1,0 +1,25 @@
+// Icônes originales (traits simples, 24×24).
+const s = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+export const ICONS = {
+  sketch: s('<path d="M4 20 20 4"/><path d="M15 4h5v5"/><rect x="3" y="12" width="7" height="7" rx="1"/><circle cx="16.5" cy="16.5" r="3.5"/>'),
+  extrude: s('<path d="M5 15 12 19l7-4"/><path d="M5 15V9l7-4 7 4v6"/><path d="M12 19v-6"/><path d="M5 9l7 4 7-4"/><path d="M12 2v2" />'),
+  cut: s('<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M9 10.5l3-1.5 3 1.5v3l-3 1.5-3-1.5z" fill="currentColor" fill-opacity=".25"/>'),
+  revolve: s('<ellipse cx="12" cy="17" rx="7" ry="3"/><path d="M5 17V9"/><path d="M19 17V9"/><ellipse cx="12" cy="9" rx="7" ry="3"/><path d="M12 2v20" stroke-dasharray="2 2"/>'),
+  hole: s('<path d="M3 9l9-5 9 5-9 5z"/><path d="M3 9v6l9 5 9-5V9"/><ellipse cx="12" cy="9" rx="3" ry="1.6" fill="currentColor"/>'),
+  fillet: s('<path d="M4 20V11a7 7 0 0 1 7-7h9"/><path d="M4 4h4M4 4v4" opacity=".5"/>'),
+  chamfer: s('<path d="M4 20V10l6-6h10"/><path d="M4 4h4M4 4v4" opacity=".5"/>'),
+  shell: s('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M7 8.5l5-2.5 5 2.5v7l-5 2.5-5-2.5z"/>'),
+  mirror: s('<path d="M12 3v18" stroke-dasharray="2 2"/><path d="M9 6 4 18h5z"/><path d="M15 6l5 12h-5z"/>'),
+  pattern: s('<rect x="3" y="9" width="5" height="6" rx="1"/><rect x="10" y="9" width="5" height="6" rx="1" opacity=".7"/><rect x="17" y="9" width="4" height="6" rx="1" opacity=".45"/>'),
+  params: s('<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>'),
+  origin: s('<path d="M5 19V5"/><path d="M5 19h14"/><path d="M5 19l9-9"/>'),
+  select: s('<path d="M5 3l14 8-6 2-2 6z"/>'),
+  rect: s('<rect x="4" y="6" width="16" height="12" rx="1"/>'),
+  circle: s('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r=".8" fill="currentColor"/>'),
+  polygon: s('<path d="M12 3l8 5v8l-8 5-8-5V8z"/>'),
+  slot: s('<rect x="3" y="8" width="18" height="8" rx="4"/>'),
+  poly: s('<path d="M4 18 7 6l7 4 6-4-2 12z"/><circle cx="4" cy="18" r="1.3" fill="currentColor"/><circle cx="7" cy="6" r="1.3" fill="currentColor"/>'),
+  point: s('<path d="M12 6v12M6 12h12"/>'),
+  fit: s('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+  done: s('<path d="M5 12l5 5 9-10"/>'),
+};

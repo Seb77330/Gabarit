@@ -1,0 +1,4 @@
+Gabarit utilise ces logiciels libres :
+- OpenCascade Technology (noyau géométrique), licence LGPL 2.1 avec exception — https://dev.opencascade.org
+- replicad et replicad-opencascadejs (Steve Genoud), licences MIT et LGPL 2.1 — https://replicad.xyz
+- three.js, licence MIT — https://threejs.org
