@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gabarit</title>
 <meta name="description" content="Gabarit, logiciel de conception 3D gratuit, dans ton navigateur.">
-<meta name="theme-color" content="#1d2733">
+<meta name="theme-color" content="#17202b">
+<script>try{var t=localStorage.getItem("gabarit-theme");if(t!=="light"&&t!=="dark")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
@@ -22,14 +23,17 @@
       <button data-act="open" title="Ouvrir une pièce (.gabarit)">Ouvrir</button>
       <button data-act="save" title="Enregistrer (Ctrl+S)">Enregistrer</button>
       <span class="sep"></span>
-      <button data-act="undo" title="Annuler (Ctrl+Z)" aria-label="Annuler">↶</button>
-      <button data-act="redo" title="Rétablir (Ctrl+Y)" aria-label="Rétablir">↷</button>
+      <button data-act="undo" class="icon" title="Annuler (Ctrl+Z)" aria-label="Annuler"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+      <button data-act="redo" class="icon" title="Rétablir (Ctrl+Y)" aria-label="Rétablir"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
       <span class="sep"></span>
       <button data-act="stl" class="accent" title="Pour l’impression 3D">Exporter STL</button>
-      <button data-act="more" title="STEP, 3MF, OBJ, DXF">Autres formats</button>
+      <button data-act="more" class="xp" title="STEP, 3MF, OBJ, DXF">Autres formats</button>
       <button data-act="share" title="Envoyer la pièce par un simple lien">Partager</button>
-      <button data-act="versions" title="Enregistrer une version ou revenir à une ancienne">Versions</button>
-      <button data-act="help" title="Aide" aria-label="Aide">?</button>
+      <button data-act="versions" class="xp" title="Enregistrer une version ou revenir à une ancienne">Versions</button>
+      <span class="sep"></span>
+      <div class="mode-sw" id="modeSw" role="group" aria-label="Mode d’affichage"><button data-mode="simple" title="Mode Simple : l’essentiel, avec des mots de tous les jours">Simple</button><button data-mode="expert" title="Mode Expert : tous les outils, comme dans un logiciel de CAO">Expert</button></div>
+      <button data-act="theme" class="icon" title="Thème clair ou sombre" aria-label="Changer de thème"></button>
+      <button data-act="help" class="icon" title="Aide" aria-label="Aide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3a2.6 2.6 0 1 1 3.9 2.3c-.9.5-1.4 1-1.4 2"/><path d="M12 17h0"/></svg></button>
     </nav>
   </header>
   <div class="tabs" id="tabs"></div>

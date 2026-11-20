@@ -6,7 +6,7 @@ const { chromium } = require("playwright");
   const p = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message + e.stack)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   const ok = (c, m) => { console.log((c ? "OK   " : "FAIL ") + m); if (!c) process.exitCode = 1; };
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   await p.click("text=Voir l’exemple");
   await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 60000 });
   await p.evaluate(() => { const d = window.gabarit.doc; d.features.push({ id: "fsk", type: "sketch", name: "Test", plane: { kind: "std", name: "dessus", offset: "ep" }, entities: [] }); window.gabarit.loadDoc(JSON.parse(JSON.stringify(d))); });

@@ -3,7 +3,7 @@ const { chromium } = require("playwright");
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
   const p = await b.newPage({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message + e.stack)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   await p.click("text=Nouvelle pièce"); await p.click("text=Plan de dessus");
   const box = await p.locator("#skSvg").boundingBox(); const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
   const G = (fn, a) => p.evaluate(fn, a);

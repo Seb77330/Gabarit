@@ -7,7 +7,7 @@ const { chromium } = require("playwright");
   const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message + e.stack)); p.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   const ok = (c, m) => { console.log((c ? "OK   " : "FAIL ") + m); if (!c) process.exitCode = 1; };
   const names = () => p.$$eval("#tabs .tab .nm", (l) => l.map((x) => x.textContent.replace(/\s/g, " ")));
-  await p.goto("http://localhost:8765/");
+  await p.goto("http://localhost:8765/?mode=expert");
   await p.click("text=Voir l’exemple");
   await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 60000 });
   ok((await names()).join() === "Équerre de fixation", "un onglet pour l’exemple : " + (await names()).join(" | "));

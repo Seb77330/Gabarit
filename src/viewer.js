@@ -1,6 +1,27 @@
 // Vue 3D : affichage de la pièce, des esquisses, sélection de faces et d'arêtes.
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+
+// Sol : quadrillage qui s'estompe au loin et ombre douce sous la pièce.
+const GROUND_VS = `varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`;
+const GROUND_FS = `
+varying vec3 vW;
+uniform float uStep, uFade, uShadow, uSoft, uAlpha;
+uniform vec2 uCenter, uHalf;
+uniform vec3 uLine;
+float grid(vec2 p, float s) { vec2 c = p / s; vec2 g = abs(fract(c - 0.5) - 0.5) / fwidth(c); return 1.0 - min(min(g.x, g.y), 1.0); }
+void main() {
+  vec2 p = vW.xy;
+  float fade = 1.0 - smoothstep(uFade * 0.3, uFade, length(p - uCenter));
+  float a = max(grid(p, uStep) * 0.2, grid(p, uStep * 10.0) * 0.5) * fade * uAlpha;
+  vec2 q = abs(p - uCenter) - uHalf;
+  float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+  float sh = uShadow * (1.0 - smoothstep(-uSoft * 0.25, uSoft, sd));
+  float alpha = a + sh * (1.0 - a);
+  if (alpha < 0.003) discard;
+  gl_FragColor = vec4(uLine * a / alpha, alpha);
+}`;
 
 export class Viewer {
   constructor(host) {
@@ -17,14 +38,16 @@ export class Viewer {
     this.controls.screenSpacePanning = true;
     // souris : molette = zoom, clic molette (ou clic gauche) = tourner, Ctrl + molette cliquée ou clic droit glissé = déplacer
     this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.6));
-    const d1 = new THREE.DirectionalLight(0xffffff, 1.4); d1.position.set(1, -1.5, 2); this.camera.add(d1);
-    const d2 = new THREE.DirectionalLight(0xffffff, 0.5); d2.position.set(-2, 1, -1); this.camera.add(d2);
+    // lumière : ambiance douce (reflets d'un studio) + deux lampes qui suivent la caméra
+    try { const pm = new THREE.PMREMGenerator(this.renderer); this.scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture; this.scene.environmentIntensity = 0.32; pm.dispose(); } catch { /* sans reflets */ }
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8f99, this.scene.environment ? 0.55 : 1.6));
+    const d1 = new THREE.DirectionalLight(0xffffff, this.scene.environment ? 1.05 : 1.4); d1.position.set(1, -1.5, 2); this.camera.add(d1);
+    const d2 = new THREE.DirectionalLight(0xffffff, 0.4); d2.position.set(-2, 1, -1); this.camera.add(d2);
     this.scene.add(this.camera);
     this.part = new THREE.Group(); this.scene.add(this.part);
     this.overlay = new THREE.Group(); this.scene.add(this.overlay);
     this.helpers = new THREE.Group(); this.scene.add(this.helpers);
-    this.mat = new THREE.MeshStandardMaterial({ color: 0xc9d1da, metalness: 0.1, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.DoubleSide });
+    this.mat = new THREE.MeshStandardMaterial({ color: 0xc3ccd7, metalness: 0.18, roughness: 0.5, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.DoubleSide });
     this.hoverMat = new THREE.MeshStandardMaterial({ color: 0xe0874f, metalness: 0.1, roughness: 0.5, polygonOffset: true, polygonOffsetFactor: 0.5, polygonOffsetUnits: 0.5, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
     this.selMat = this.hoverMat.clone(); this.selMat.color.set(0xc4552b); this.selMat.opacity = 0.95;
     this.edgeMat = new THREE.LineBasicMaterial({ color: 0x23272e });
@@ -35,6 +58,11 @@ export class Viewer {
     this.pickMode = null; // { kind: "face" | "edge" | "point", onPick }
     this.data = null; this.size = 100;
     this.markers = [];
+    this.ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, side: THREE.DoubleSide, vertexShader: GROUND_VS, fragmentShader: GROUND_FS,
+      uniforms: { uStep: { value: 10 }, uFade: { value: 300 }, uShadow: { value: 0.2 }, uSoft: { value: 20 }, uAlpha: { value: 1 }, uCenter: { value: new THREE.Vector2() }, uHalf: { value: new THREE.Vector2() }, uLine: { value: new THREE.Color(0x6f7a89) } },
+    }));
+    this.ground.renderOrder = -1; this.scene.add(this.ground); this.shadowK = 0.2; this.updateGround();
     this.addAxes();
     this.resize();
     new ResizeObserver(() => this.resize()).observe(host);
@@ -50,8 +78,37 @@ export class Viewer {
     this.sketchCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100000);
     this.sketchCam.add(d1.clone(), d2.clone()); this.scene.add(this.sketchCam);
     this.sketchView = null;
-    const loop = () => { if (!this.sketchView) this.controls.update(); this.renderer.render(this.scene, this.sketchView ? this.sketchCam : this.camera); this.updateCube(); requestAnimationFrame(loop); };
+    const loop = () => {
+      if (!this.sketchView) this.controls.update();
+      // le sol disparaît pendant l'esquisse, et s'efface quand on regarde la pièce par-dessous
+      const below = this.camera.position.z < this.ground.position.z;
+      this.ground.visible = !this.sketchView;
+      this.ground.material.uniforms.uAlpha.value = below ? 0.3 : 1; this.ground.material.uniforms.uShadow.value = below || !this.hasBox ? 0 : this.shadowK;
+      this.renderer.render(this.scene, this.sketchView ? this.sketchCam : this.camera); this.updateCube(); requestAnimationFrame(loop);
+    };
     loop();
+  }
+  // Place le sol sous la pièce (ou à Z = 0 quand il n'y a rien) et règle la taille des carreaux.
+  updateGround(known) {
+    const g = this.ground; if (!g) return;
+    let box = known || null;
+    if (!box && (this.mesh || this.asm?.size)) box = new THREE.Box3().setFromObject(this.part);
+    if (box?.isEmpty()) box = null;
+    const size = box ? Math.max(10, box.getSize(new THREE.Vector3()).length()) : 120;
+    const c = box ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3();
+    const u = g.material.uniforms;
+    const step = Math.pow(10, Math.round(Math.log10(size / 14)));
+    u.uStep.value = step; u.uFade.value = Math.max(size * 2.4, step * 14); u.uSoft.value = size * 0.18;
+    u.uCenter.value.set(c.x, c.y);
+    if (box) u.uHalf.value.set((box.max.x - box.min.x) / 2, (box.max.y - box.min.y) / 2); else u.uHalf.value.set(0, 0);
+    this.hasBox = !!box;
+    g.position.set(c.x, c.y, (box ? box.min.z : 0) - size * 0.0015); g.scale.setScalar(u.uFade.value * 2.2);
+  }
+  setTheme(dark) {
+    this.dark = !!dark;
+    this.ground.material.uniforms.uLine.value.set(dark ? 0xa9b8cc : 0x6f7a89);
+    this.shadowK = dark ? 0.45 : 0.2;
+    this.edgeMat.color.set(dark ? 0x0d1218 : 0x23272e);
   }
   resize() {
     const w = this.host.clientWidth || 1, h = this.host.clientHeight || 1;
@@ -69,7 +126,7 @@ export class Viewer {
   }
   setMesh(data) {
     this.part.clear(); this.selFaceObj = null; this.asm = null; this.asmBox = null; this.data = data; this.faceMeshes = new Map(); this.edgeObjs = [];
-    if (!data) return;
+    if (!data) { this.mesh = null; this.updateGround(); return; }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(data.vertices, 3));
     geo.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
@@ -90,7 +147,7 @@ export class Viewer {
     if (Math.abs(size - this.size) / this.size > 0.5) { this.size = size; this.addAxes(); }
     this.size = size;
     this.raycaster.params.Line.threshold = size / 150;
-    this.refreshMarkers();
+    this.refreshMarkers(); this.updateGround();
   }
   faceGeometry(faceId) {
     const g = this.data.faceGroups.find((x) => x.faceId === faceId); if (!g) return null;
@@ -100,9 +157,9 @@ export class Viewer {
     geo.setIndex(new THREE.BufferAttribute(this.data.triangles.slice(g.start, g.start + g.count), 1));
     return geo;
   }
-  fit(dir) {
+  fit(dir, box) {
     const pb = this.printDown && this.mesh ? new THREE.Box3().setFromObject(this.part) : null;
-    const bb = pb ? [pb.min.toArray(), pb.max.toArray()] : this.data ? this.data.bb : this.asmBox ? [this.asmBox.min.toArray(), this.asmBox.max.toArray()] : [[-50, -50, 0], [50, 50, 50]];
+    const bb = box ? box : pb ? [pb.min.toArray(), pb.max.toArray()] : this.data ? this.data.bb : this.asmBox ? [this.asmBox.min.toArray(), this.asmBox.max.toArray()] : [[-50, -50, 0], [50, 50, 50]];
     const c = new THREE.Vector3((bb[0][0] + bb[1][0]) / 2, (bb[0][1] + bb[1][1]) / 2, (bb[0][2] + bb[1][2]) / 2);
     const r = Math.max(10, Math.hypot(bb[1][0] - bb[0][0], bb[1][1] - bb[0][1], bb[1][2] - bb[0][2]) / 2);
     const v = dir ? new THREE.Vector3(...dir).normalize() : this.camera.position.clone().sub(this.controls.target).normalize();
@@ -329,8 +386,8 @@ export class Viewer {
     const geo = this.geo; const data = this.data;
     if (!g || !geo || !data) {
       if (geo?.getAttribute("color")) geo.deleteAttribute("color");
-      this.mat.vertexColors = false; this.mat.color.set(0xc9d1da); this.mat.needsUpdate = true;
-      this.part.quaternion.identity(); this.printDown = null; return;
+      this.mat.vertexColors = false; this.mat.color.set(0xc3ccd7); this.mat.needsUpdate = true;
+      this.part.quaternion.identity(); this.printDown = null; this.updateGround(); return;
     }
     const V = data.vertices, N = data.normals, n = V.length / 3;
     let maxD = -Infinity; for (let i = 0; i < n; i++) maxD = Math.max(maxD, V[i * 3] * g[0] + V[i * 3 + 1] * g[1] + V[i * 3 + 2] * g[2]);
@@ -348,7 +405,7 @@ export class Viewer {
     geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
     this.mat.vertexColors = true; this.mat.color.set(0xffffff); this.mat.needsUpdate = true;
     this.part.quaternion.setFromUnitVectors(new THREE.Vector3(...g), new THREE.Vector3(0, 0, -1));
-    this.printDown = g;
+    this.printDown = g; this.updateGround();
   }
   // ---------- Assemblage : un groupe par composant ----------
   setAssembly(list) {
@@ -378,6 +435,7 @@ export class Viewer {
       this.size = Math.max(10, size); this.raycaster.params.Line.threshold = this.size / 150;
       this.asmBox = box;
     }
+    this.updateGround(box);
   }
   updateAssembly(list) {
     if (!this.asm) return;
@@ -393,6 +451,7 @@ export class Viewer {
     this.part.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(this.part);
     if (!box.isEmpty()) this.asmBox = box;
+    this.updateGround(box);
   }
   asmHit(e) {
     if (!this.asm) return null;
@@ -409,4 +468,22 @@ export class Viewer {
     const save = this.data; this.data = { bb: [b.min.toArray(), b.max.toArray()] }; this.fit(dir); this.data = save;
   }
   snapshot() { return this.renderer.domElement.toDataURL("image/png"); }
+  // Images de la pièce (PNG) sous plusieurs angles, sur fond clair : pour la montrer ou la publier.
+  shots(dirs, w = 1600, h = 1200) {
+    const r = this.renderer, cam = this.camera, u = this.ground.material.uniforms;
+    const keep = { pos: cam.position.clone(), up: cam.up.clone(), target: this.controls.target.clone(), near: cam.near, far: cam.far, aspect: cam.aspect, size: r.getSize(new THREE.Vector2()), pr: r.getPixelRatio(), bg: this.scene.background, line: u.uLine.value.clone(), sh: u.uShadow.value, al: u.uAlpha.value };
+    const hide = [this.helpers, this.overlay, this.planeGroup, this.ghost, this.regionGroup, this.measureGroup, this.cogObj].filter(Boolean); const vis = hide.map((o) => o.visible);
+    hide.forEach((o) => { o.visible = false; });
+    r.setPixelRatio(1); r.setSize(w, h, false); cam.aspect = w / h;
+    this.scene.background = new THREE.Color(0xf4f1ec); u.uLine.value.set(0x6f7a89); u.uShadow.value = this.hasBox ? 0.2 : 0; u.uAlpha.value = 1; this.ground.visible = true;
+    const out = [];
+    try { for (const d of dirs) { this.fit(d); r.render(this.scene, cam); out.push(r.domElement.toDataURL("image/png")); } }
+    finally {
+      this.scene.background = keep.bg; u.uLine.value.copy(keep.line); u.uShadow.value = keep.sh; u.uAlpha.value = keep.al;
+      r.setPixelRatio(keep.pr); r.setSize(keep.size.x, keep.size.y, false);
+      cam.aspect = keep.aspect; cam.position.copy(keep.pos); cam.up.copy(keep.up); this.controls.target.copy(keep.target); cam.near = keep.near; cam.far = keep.far; cam.updateProjectionMatrix(); this.controls.update();
+      hide.forEach((o, i) => { o.visible = vis[i]; });
+    }
+    return out;
+  }
 }

@@ -2,8 +2,9 @@
 import { Viewer } from "./viewer.js";
 import { Sketcher, newId, circle3 } from "./sketcher.js";
 import { read3mf, toStl, simplify, readStl } from "./mesh3mf.js";
+import { zipStore } from "./meshfiles.js";
 const MAX_TRIS = 20000;
-import { ICONS } from "./icons.js";
+import { ICONS, SHAPE_ICONS } from "./icons.js";
 import { evalExpr, varsMap } from "./expr.js";
 import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, toWorld, STD_PLANES, cross, dot, norm, scale } from "./geo.js";
 import { exampleDoc } from "./example.js";
@@ -75,9 +76,45 @@ const TYPES = {
   rib: { label: "Nervure", icon: "rib" },
   thread: { label: "Filetage", icon: "thread" },
   helix: { label: "Ressort", icon: "helix" },
+  shape: { label: "Forme", icon: "shape" },
 };
 const MATERIALS = { pla: ["PLA", 1.24], petg: ["PETG", 1.27], abs: ["ABS", 1.04], resine: ["Résine", 1.15], alu: ["Aluminium", 2.7], acier: ["Acier", 7.85], inox: ["Inox", 8.0], laiton: ["Laiton", 8.5], bois: ["Bois (chêne)", 0.75] };
 const STORE = "gabarit-doc-v1";
+// ---------- Mode (Simple ou Expert) et thème (clair ou sombre) ----------
+const pref = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const setPref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* stockage plein */ } };
+// Quelqu'un qui a déjà des pièces ici garde tous les outils ; une première visite commence en mode Simple.
+const HAD_WORK = ["gabarit-doc-v1", "gabarit-lib", "gabarit-tabs"].some((k) => pref(k));
+let mode = (() => {
+  const q = new URLSearchParams(location.search).get("mode");
+  if (q === "simple" || q === "expert") { setPref("gabarit-mode", q); return q; }
+  const m = pref("gabarit-mode");
+  return m === "simple" || m === "expert" ? m : HAD_WORK ? "expert" : "simple";
+})();
+const isSimple = () => mode === "simple";
+document.body.classList.toggle("simple", isSimple());
+function setMode(m, quiet) {
+  if (m !== "simple" && m !== "expert") return;
+  const changed = m !== mode; mode = m; setPref("gabarit-mode", m);
+  if (changed && m === "simple") setPref("gabarit-coach", "1");
+  applyMode();
+  if (changed && !quiet) toast(m === "simple" ? "Mode Simple : l’essentiel, avec des mots de tous les jours." : "Mode Expert : tous les outils sont là.");
+}
+function applyMode() {
+  document.body.classList.toggle("simple", isSimple());
+  document.querySelectorAll("#modeSw button").forEach((b) => { const on = b.dataset.mode === mode; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); });
+  closeShapes(); renderTools(); treeTitle();
+  if (!isAsm()) { renderTree(); if (!st.editSketch) renderProps(); }
+  renderCoach();
+}
+function treeTitle() { $(".tree > h2").textContent = isAsm() ? "Assemblage" : isSimple() ? "Étapes de ta pièce" : "Historique"; }
+function applyTheme(t) {
+  if (t) { document.documentElement.dataset.theme = t; setPref("gabarit-theme", t); }
+  const dark = document.documentElement.dataset.theme === "dark";
+  const b = $("[data-act=theme]"); if (b) { b.innerHTML = dark ? ICONS.sun : ICONS.moon; b.title = dark ? "Passer au thème clair" : "Passer au thème sombre"; }
+  document.querySelector("meta[name=theme-color]")?.setAttribute("content", dark ? "#0c1016" : "#17202b");
+  viewer.setTheme(dark);
+}
 
 let doc = emptyDoc();
 const st = {
@@ -191,7 +228,7 @@ function loadDoc(d, fit = true) {
   const wasAsm = isAsm();
   doc = Object.assign(d.kind === "assembly" ? emptyAsm() : emptyDoc(), d);
   document.body.classList.toggle("asm", isAsm());
-  $(".tree > h2").textContent = isAsm() ? "Assemblage" : "Historique";
+  treeTitle();
   if (isAsm()) {
     closeSketch(true); stopPick(); viewer.setPick(null); banner(null); st.mesh = null; viewer.setCog(null); if (viewer.section) toggleSection();
     hist = []; hidx = -1; pushHistory();
@@ -241,13 +278,20 @@ function restartWorker() {
   if (restarts.length > 3) { showBusy(false); toast("Le moteur 3D bloque sur cette pièce. Annule la dernière modification (Ctrl+Z)."); return; } try { worker.terminate(); } catch { /* déjà arrêté */ } workerReady = false; st.building = false; startWorker(); }
 function onWorker(m) {
   if (m.type === "ready") { workerReady = true; clearTimeout(readyTimer); engineFailed = false; $(".engine-fail")?.remove(); showBusy(false); renderStatus(); if (isAsm()) asmUI.undoRefresh(); else requestBuild(0); return; }
-  if (m.type === "built" && m.preview) { if (m.req === buildReq && st.pick) viewer.setGhost(m.mesh); return; }
+  if (m.type === "built" && m.preview) {
+    if (m.req === buildReq && st.pick) {
+      viewer.setGhost(m.mesh);
+      // forme en cours de pose : on recule une fois pour la voir en entier
+      if (st.pick.kind === "place" && !st.pick.fitted && m.mesh) { st.pick.fitted = true; viewer.fit(null, m.mesh.bb); }
+    }
+    return;
+  }
   if (m.type === "built") {
     if (m.req !== buildReq) return;
     // pendant une sélection, la pièce affichée s'arrête avant l'étape : on calcule en plus l'aperçu du résultat
     const pf = st.pick?.featId ? feat(st.pick.featId) : null;
     if (m.regions && st.pick?.kind === "regions" && pf) { st.regions = m.regions; viewer.setRegions(m.regions, regionSel(pf)); }
-    if (pf && ((["fillet", "chamfer", "shell", "draft"].includes(pf.type) && (pf.edges || pf.faces || []).length) || (pf.type === "extrude" && pf.regions?.length)) && !pf.suppressed) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
+    if (pf && ((["fillet", "chamfer", "shell", "draft"].includes(pf.type) && (pf.edges || pf.faces || []).length) || (pf.type === "extrude" && pf.regions?.length) || pf.type === "shape") && !pf.suppressed) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
     else viewer.setGhost(null);
     st.building = false; showBusy(false);
     if (m.heap > 1.4e9) setTimeout(restartWorker, 50); // libère la mémoire du noyau
@@ -300,6 +344,43 @@ function doExport(kind) {
   pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind}`); toast(msgs[kind]); });
   worker.postMessage({ type: "export", req, kind, opts: { fine: true, name: doc.name, down: kind !== "step" ? doc.printDown || null : null } });
 }
+// Pack de publication : tout ce qu'il faut pour partager la pièce sur un site de modèles 3D
+// (MakerWorld de Bambu Lab, Printables, Thingiverse…) : fichiers 3MF et STL, 4 images, une fiche, la pièce modifiable.
+async function publishPack() {
+  if (isAsm()) { toast("Le pack de publication se prépare depuis une pièce."); return; }
+  if (!st.mesh) { toast("Crée d’abord un volume."); return; }
+  showBusy(true, "Préparation du pack…");
+  const bytes = async (blob) => new Uint8Array(await blob.arrayBuffer());
+  const exp = (kind) => new Promise((res, rej) => {
+    const req = ++exportReq; const t = setTimeout(() => { pendingExport.delete(req); rej(new Error("export")); }, 90000);
+    pendingExport.set(req, (blob) => { clearTimeout(t); res(blob); });
+    worker.postMessage({ type: "export", req, kind, opts: { fine: true, name: doc.name, down: doc.printDown || null } });
+  });
+  try {
+    const stl = await bytes(await exp("stl")), mf = await bytes(await exp("3mf"));
+    const colored = viewer.mat.vertexColors; // vue « Impression 3D » ouverte : images sans les couleurs de surplomb
+    if (colored) { viewer.mat.vertexColors = false; viewer.mat.color.set(0xc3ccd7); viewer.mat.needsUpdate = true; }
+    const png = viewer.shots([[1, -1.3, 0.9], [-1, -1.3, 0.9], [0, -1, 0.02], [0.01, -0.01, 1]]).map((u) => { const bin = atob(u.split(",")[1]); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; });
+    if (colored) { viewer.mat.vertexColors = true; viewer.mat.color.set(0xffffff); viewer.mat.needsUpdate = true; }
+    const [lo, hi] = st.mesh.bb; const vol = st.mesh.volume / 1000; const mat = MATERIALS[doc.material] || MATERIALS.pla; const n = safeName();
+    const dims = `${nf(hi[0] - lo[0], 1)} × ${nf(hi[1] - lo[1], 1)} × ${nf(hi[2] - lo[2], 1)} mm`;
+    const fiche = [
+      `${doc.name}`, "=".repeat(Math.max(8, doc.name.length)), "",
+      `Dimensions : ${dims}`, `Volume : ${nf(vol, 2)} cm³`, `Masse estimée : ${nf(vol * mat[1], 1)} g en ${mat[0]} (pièce pleine)`,
+      `Orientation d’impression : ${doc.printDown ? "posée à plat (celle choisie dans « Impression 3D »)" : "celle du modèle"}`, "",
+      "Dans ce dossier", "---------------",
+      `${n}.3mf : pour ton trancheur (Bambu Studio, OrcaSlicer, PrusaSlicer, Cura…)`, `${n}.stl : le même modèle, format universel`,
+      "images/ : 4 vues de la pièce, à utiliser comme photos de présentation", `${n}.gabarit : la pièce modifiable, à rouvrir dans Gabarit`, "",
+      "Pour la publier sur un site de modèles 3D (MakerWorld, Printables, Thingiverse…)", "--------------------------------------------------------------------------------",
+      "1. Crée un nouveau modèle sur le site.", "2. Dépose le fichier 3MF (ou le STL).", "3. Ajoute les images du dossier « images ».", "4. Colle la description ci-dessous et complète-la.", "",
+      "Description proposée", "--------------------",
+      `${doc.name}. Dimensions : ${dims}. Environ ${nf(vol * mat[1], 0)} g de ${mat[0]}.`, "Modèle conçu avec Gabarit.", "",
+    ].map((l) => l.replace(/ ([:;!?»])/g, "\u00a0$1").replace(/« /g, "«\u00a0")).join("\r\n");
+    download(zipStore([[`${n}.3mf`, mf], [`${n}.stl`, stl], ["images/1-vue-3d.png", png[0]], ["images/2-vue-3d-arriere.png", png[1]], ["images/3-face.png", png[2]], ["images/4-dessus.png", png[3]], [`${n}.gabarit`, JSON.stringify(doc, null, 1)], ["fiche.txt", "\ufeff" + fiche]]), `${n}-publication.zip`);
+    toast("Pack de publication enregistré : fichiers 3MF et STL, 4 images et une fiche.");
+  } catch { toast("Le pack n’a pas pu être préparé. Réessaie après le calcul de la pièce."); }
+  showBusy(false);
+}
 const safeName = () => (doc.name || "piece").replace(/[\\/:*?"<>|]+/g, "-").trim() || "piece";
 function download(blob, name) {
   const a = h("a", { href: URL.createObjectURL(blob), download: name }); document.body.append(a); a.click();
@@ -308,16 +389,28 @@ function download(blob, name) {
 
 // ---------- Interface : outils ----------
 const TOOLBAR = [
-  [["sketch", "Esquisse"], ["plane", "Plan"]],
-  [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"], ["helix", "Ressort"]],
-  [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"]],
-  [["mirror", "Symétrie"], ["pattern", "Répétition"], ["import", "Importer"]],
-  [["measure", "Mesurer"], ["section", "Coupe"], ["print", "Impression 3D"], ["drawing", "Mise en plan"]],
+  ["Esquisse", [["sketch", "Esquisse"], ["plane", "Plan"]]],
+  ["Volumes", [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"], ["helix", "Ressort"], ["shapes", "Formes"]]],
+  ["Finitions", [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"]]],
+  ["Copies", [["mirror", "Symétrie"], ["pattern", "Répétition"], ["import", "Importer"]]],
+  ["Outils", [["measure", "Mesurer"], ["section", "Coupe"], ["print", "Impression 3D"], ["drawing", "Mise en plan"]]],
 ];
+// Mode Simple : moins d'outils, des mots de tous les jours (les mêmes outils derrière).
+const TOOLBAR_SIMPLE = [
+  ["Créer", [["shapes", "Formes prêtes", "hero"], ["sketch", "Dessiner"], ["import", "Importer"]]],
+  ["Volume", [["extrude", "Donner du volume"], ["cut", "Creuser"], ["revolve", "Faire tourner"]]],
+  ["Finitions", [["hole", "Percer"], ["fillet", "Arrondir"], ["chamfer", "Biseauter"], ["shell", "Vider"]]],
+  ["Copies", [["mirror", "Symétrie"], ["pattern", "Répéter"]]],
+  ["Vérifier", [["measure", "Mesurer"], ["print", "Imprimer en 3D"]]],
+];
+const toolbar = () => (isSimple() ? TOOLBAR_SIMPLE : TOOLBAR);
+const TOOL_ICON = { shapes: "shape" };
 function renderTools() {
   const t = $("#tools"); t.innerHTML = "";
-  for (const grp of TOOLBAR) {
-    t.append(h("div", { class: "tgroup" }, grp.map(([k, label]) => h("button", { class: "tbtn", "data-tool": k, title: TOOL_TIPS[k], onclick: () => toolAction(k) }, h("span", { html: ICONS[k === "cut" ? "cut" : k] }), label))));
+  for (const [cap, grp] of toolbar()) {
+    t.append(h("div", { class: "tgroup" },
+      h("div", { class: "trow" }, grp.map(([k, label, cls]) => h("button", { class: "tbtn" + (cls ? " " + cls : ""), "data-tool": k, title: TOOL_TIPS[k], onclick: () => toolAction(k) }, h("span", { html: ICONS[TOOL_ICON[k] || k] }), label))),
+      h("div", { class: "tcap" }, cap)));
   }
 }
 const TOOL_TIPS = {
@@ -335,7 +428,8 @@ const TOOL_TIPS = {
   loft: "Relier plusieurs esquisses par une forme qui passe de l’une à l’autre",
   sweep: "Faire glisser un profil le long d’un chemin (tuyau, poignée, ressort plat…)",
   draft: "Incliner des faces pour le démoulage",
-  import: "Importer une pièce STEP ou STL",
+  import: "Ajouter un fichier 3D à la pièce : STL, 3MF (Bambu Lab, Prusa…) ou STEP",
+  shapes: "Poser une forme toute faite : boîte, cylindre, sphère, engrenage, texte…",
   helix: "Créer un ressort (fil enroulé en hélice)",
   thread: "Fileter un axe ou tarauder un trou (vrai filet en 3D)",
   rib: "Ajouter un renfort à partir d’un simple trait d’esquisse",
@@ -357,7 +451,7 @@ function renderCorner() {
 }
 let lastTool = null;
 function toolAction(k) {
-  if (!["measure", "section", "drawing", "print", "import"].includes(k)) lastTool = k;
+  if (!["measure", "section", "drawing", "print", "import", "shapes"].includes(k)) lastTool = k;
   if (engineFailed && !["sketch", "plane", "measure", "section"].includes(k)) toast("Le moteur 3D n’a pas démarré dans cet aperçu : ouvre Gabarit.html dans Chrome, Edge ou Firefox pour créer des volumes.");
   if (st.editSketch) {
     if (["measure", "section"].includes(k)) { toast("Mesure et coupe : sors d’abord de l’esquisse."); return; }
@@ -372,6 +466,7 @@ function toolAction(k) {
   stopPick(); stopMeasure();
   if (k === "plane") { choosePlane((base) => { insertFeature({ id: newId("f"), type: "plane", name: nextName("plane"), base, offset: "10", rot: "x", angle: "0" }); }, "Le nouveau plan part de quel plan ?"); return; }
   if (k === "import") { importFile(); return; }
+  if (k === "shapes") { shapesBox(); return; }
   if (k === "loft") {
     const sks = doc.features.slice(0, st.stopAt ?? doc.features.length).filter((f) => f.type === "sketch" && !f.suppressed);
     const used = new Set(doc.features.flatMap((f) => [f.sketch, f.profile, f.path, ...(f.sketches || [])]).filter(Boolean));
@@ -437,6 +532,58 @@ function toolAction(k) {
   if (k === "shell") { const f = { id: newId("f"), type: "shell", name: nextName("shell"), t: "2", faces: pre.faces.map((x) => x.p) }; insertFeature(f); startPick("faces", f.id); return; }
   if (k === "mirror") { insertFeature({ id: newId("f"), type: "mirror", name: nextName("mirror"), target: "part", feats: [], plane: { kind: "std", name: "droite", offset: "0" } }); return; }
   if (k === "pattern") { insertFeature({ id: newId("f"), type: "pattern", name: nextName("pattern"), target: "part", feats: [], kind: "lin", axis: "x", count: "3", step: "20", angle: "360", two: false, axis2: "y", count2: "2", step2: "20" }); return; }
+}
+// ---------- Formes prêtes ----------
+// [nom, valeurs de départ, champs de taille [clé, libellé, unité]]
+const SHAPES = {
+  box: ["Boîte", { a: "40", b: "30", h: "20", r: "0" }, [["a", "Longueur (X)"], ["b", "Largeur (Y)"], ["h", "Hauteur (Z)"], ["r", "Coins arrondis"]]],
+  cyl: ["Cylindre", { d: "30", h: "30" }, [["d", "Diamètre"], ["h", "Hauteur"]]],
+  sphere: ["Sphère", { d: "30" }, [["d", "Diamètre"]]],
+  cone: ["Cône", { d: "30", d2: "0", h: "30" }, [["d", "Diamètre du bas"], ["d2", "Diamètre du haut (0 = pointu)"], ["h", "Hauteur"]]],
+  tube: ["Tube", { d: "30", t: "3", h: "30" }, [["d", "Diamètre extérieur"], ["t", "Épaisseur de la paroi"], ["h", "Hauteur"]]],
+  torus: ["Anneau", { d: "40", t: "10" }, [["d", "Diamètre extérieur"], ["t", "Grosseur de l’anneau"]]],
+  prism: ["Prisme", { d: "30", n: "6", h: "20" }, [["d", "Diamètre"], ["n", "Nombre de côtés", ""], ["h", "Hauteur"]]],
+  wedge: ["Rampe", { a: "40", b: "30", h: "20" }, [["a", "Longueur (X)"], ["b", "Largeur (Y)"], ["h", "Hauteur (Z)"]]],
+  star: ["Étoile", { d: "40", n: "5", q: "45", h: "5" }, [["d", "Diamètre"], ["n", "Nombre de branches", ""], ["q", "Rayon du creux", "%"], ["h", "Épaisseur"]]],
+  heart: ["Cœur", { a: "40", h: "5" }, [["a", "Largeur"], ["h", "Épaisseur"]]],
+  gear: ["Engrenage", { n: "16", m: "2", d: "5", h: "6" }, [["n", "Nombre de dents", ""], ["m", "Taille des dents (module)"], ["d", "Trou au centre"], ["h", "Épaisseur"]]],
+  text: ["Texte", { txt: "Gabarit", s: "12", h: "3" }, [["s", "Taille des lettres"], ["h", "Épaisseur"]]],
+};
+const r2 = (v) => String(Math.round(v * 100) / 100);
+// Angles (autour de Y puis de Z) qui amènent l'axe de la forme sur la direction n.
+function normalAngles(n) {
+  const u = norm(n); if (Math.abs(u[2]) > 0.9999) return [u[2] > 0 ? 0 : 180, 0];
+  return [(Math.acos(Math.max(-1, Math.min(1, u[2]))) * 180) / Math.PI, (Math.atan2(u[1], u[0]) * 180) / Math.PI];
+}
+function shapesOutside(e) { if (!e.target.closest("#shapes") && !e.target.closest("[data-tool=shapes]")) closeShapes(); }
+function closeShapes() { $("#shapes")?.remove(); document.removeEventListener("pointerdown", shapesOutside, true); }
+function shapesBox() {
+  if ($("#shapes")) { closeShapes(); return; }
+  const tip = !st.mesh ? "Choisis une forme : elle arrive au centre, puis tu règles sa taille."
+    : st.facePlane ? "Choisis une forme : elle se pose sur la face que tu as choisie."
+      : "Choisis une forme, puis clique sur la pièce pour la poser où tu veux.";
+  const box = h("div", { id: "shapes", class: "shapes" }, h("h4", {}, "Formes prêtes"), h("p", {}, tip),
+    h("div", { class: "sgrid" }, Object.entries(SHAPES).map(([k, [label]]) => h("button", { class: "sh", "data-shape": k, onclick: () => { closeShapes(); addShape(k); } }, h("span", { html: SHAPE_ICONS[k] }), label))));
+  document.body.append(box);
+  const b = document.querySelector(".tbtn[data-tool=shapes]")?.getBoundingClientRect(); const r = box.getBoundingClientRect();
+  box.style.left = Math.max(8, Math.min(b ? b.left : 20, innerWidth - r.width - 8)) + "px"; box.style.top = ($("#tools").getBoundingClientRect().bottom + 6) + "px";
+  document.addEventListener("pointerdown", shapesOutside, true);
+}
+function addShape(kind) {
+  if (st.editSketch) closeSketch();
+  if (extras.isPrintOpen()) extras.closePrint();
+  stopPick(); stopMeasure();
+  const [label, defs] = SHAPES[kind];
+  const f = { id: newId("f"), type: "shape", kind, name: nextNameRaw(label), mode: "add", ...defs, x: "0", y: "0", z: "0", rx: "0", ry: "0", rz: "0" };
+  // Position de départ : sur la face choisie, sinon posée sur le dessus de la pièce.
+  const face = st.pre?.faces?.length === 1 && st.pre.faces[0].info?.plane ? st.pre.faces[0] : null;
+  const had = !!st.mesh;
+  if (face) { const [ry, rz] = normalAngles(face.info.n); Object.assign(f, { x: r2(face.p[0]), y: r2(face.p[1]), z: r2(face.p[2]), ry: r2(ry), rz: r2(rz) }); }
+  else if (had) { const [lo, hi] = st.mesh.bb; Object.assign(f, { x: r2((lo[0] + hi[0]) / 2), y: r2((lo[1] + hi[1]) / 2), z: r2(hi[2]) }); }
+  clearFaceSel();
+  insertFeature(f);
+  if (had) startPick("place", f.id);
+  else st.firstFit = true;
 }
 function nextNameRaw(base) { let n = 1; const names = new Set(doc.features.map((f) => f.name)); while (names.has(`${base} ${n}`)) n++; return `${base} ${n}`; }
 function insertFeature(f) {
@@ -534,6 +681,7 @@ function startPick(kind, featId) {
     cyl: "Clique sur la face cylindrique à fileter : un axe (vis) ou l’intérieur d’un trou (taraudage).",
     upto: "Clique sur la face plane où l’extrusion doit s’arrêter.",
     regions: "Les contours se croisent : clique les zones à extruder (reclique pour en retirer une), puis Entrée.",
+    place: "Clique sur la pièce pour poser la forme à cet endroit, puis Entrée. Tu peux aussi régler sa position à gauche.",
   };
   banner(texts[kind]);
   viewer.setPick({ kind: kind === "edges" ? "edge" : kind === "regions" ? "region" : "face", onPick: (hit) => onPick(hit) });
@@ -559,6 +707,15 @@ function stopPick(rebuild) {
 function onPick(hit) {
   const f = feat(st.pick.featId); if (!f) return;
   const tol = viewer.size / 120;
+  if (st.pick.kind === "place") {
+    // la forme se pose au point cliqué, son axe suit la face (vers l'extérieur pour ajouter, vers l'intérieur pour creuser)
+    let n = hit.info?.plane ? hit.info.n : hit.normal || [0, 0, 1];
+    const toCam = viewer.camera.position.toArray().map((c, i) => c - hit.point[i]);
+    if ((dot(n, toCam) < 0) !== (f.mode === "cut")) n = n.map((c) => -c);
+    const [ry, rz] = normalAngles(n);
+    mutate(() => { Object.assign(f, { x: r2(hit.point[0]), y: r2(hit.point[1]), z: r2(hit.point[2]), rx: "0", ry: r2(ry), rz: r2(rz) }); });
+    renderProps(); return;
+  }
   if (st.pick.kind === "regions") {
     const sk = feat(f.sketch); const pl = resolvePlane(sk.plane, varsMap(doc.params));
     const d = hit.point.map((c, i) => c - pl.origin[i]); const p = [round(dot(d, pl.x), 0.001), round(dot(d, pl.y), 0.001)];
@@ -655,7 +812,7 @@ function renderTree() {
     t.append(row);
   });
   if (st.stopAt === null && doc.features.length) t.append(rollbar());
-  if (!doc.features.length) t.append(h("div", { class: "param-empty", style: "padding:10px 10px" }, "Commence par une esquisse : clique sur « Esquisse » en haut à gauche."));
+  if (!doc.features.length) t.append(h("div", { class: "param-empty", style: "padding:10px 10px" }, isSimple() ? "Ta pièce est vide. Clique sur « Formes prêtes » en haut à gauche, ou sur « Dessiner »." : "Commence par une esquisse : clique sur « Esquisse » en haut à gauche."));
 }
 function rollbar() {
   const r = h("div", { class: "rollbar", title: "Fin de la pièce : glisse-la vers le haut pour remonter dans l’historique" });
@@ -798,7 +955,7 @@ function planeFields(f, allowFace = true, key = "plane", label = "Plan", withOff
 // Liste des fonctions (ajout ou enlèvement) à répéter ou copier en miroir.
 function featPicker(f) {
   const i = featIndex(f.id);
-  const ok = doc.features.slice(0, i).filter((x) => ["extrude", "revolve", "hole", "loft", "sweep", "import"].includes(x.type));
+  const ok = doc.features.slice(0, i).filter((x) => ["extrude", "revolve", "hole", "loft", "sweep", "import", "shape"].includes(x.type));
   const box = h("div", { class: "field" }, h("label", {}, "Fonctions concernées"));
   if (!ok.length) box.append(h("div", { class: "calc" }, "Aucune fonction avant celle-ci."));
   for (const x of ok) {
@@ -823,7 +980,7 @@ function renderProps() {
   P.append(h("div", { class: "okbar" },
     h("button", { class: "ok", title: "Valider (Entrée)", "aria-label": "Valider", onclick: () => validateFeature() }, "✓"),
     h("button", { class: "ko", title: "Annuler les changements (Échap)", "aria-label": "Annuler", onclick: () => cancelFeature() }, "✕"),
-    h("span", { class: "lbl" }, TYPES[f.type].label || "")));
+    h("span", { class: "lbl" }, f.type === "shape" ? (SHAPES[f.kind] || SHAPES.box)[0] : TYPES[f.type].label || "")));
   const head = h("div", { class: "head" }, h("span", { class: "ic", html: ICONS[TYPES[f.type].icon] }),
     h("input", { value: f.name, "aria-label": "Nom de l’étape", onchange: (e) => { mutate(() => { f.name = e.target.value.trim() || f.name; }); } }));
   P.append(head);
@@ -969,6 +1126,27 @@ function renderProps() {
     add(planeFields(f, false, "plane", "Plan neutre (reste fixe)"));
     add(h("div", { class: "note" }, `${(f.faces || []).length} face(s) choisie(s).`));
     add(h("div", { class: "btnrow" }, st.pick?.featId === f.id ? null : h("button", { class: "btn", onclick: () => startPick("faces", f.id) }, "Choisir les faces")));
+  }
+  if (f.type === "shape") {
+    const fields = (SHAPES[f.kind] || SHAPES.box)[2];
+    const later = featIndex(f.id) > 0;
+    const flip = () => { const a = Number(String(f.ry || 0).replace(",", ".")); if (isFinite(a)) f.ry = r2((((a + 180) % 360) + 360) % 360); };
+    const cur = f.mode || "add";
+    add(h("div", { class: "field" }, h("label", {}, "Effet"), h("div", { class: "seg" },
+      [["add", "Ajouter de la matière"], ["cut", "Creuser"]].map(([v, t]) => h("button", { class: cur === v ? "on" : "", "data-mode": v, onclick: () => { if (cur === v) return; mutate(() => { f.mode = v; if (later) flip(); }); renderProps(); } }, t)))));
+    if (cur === "cut" && !later) add(h("div", { class: "note err" }, "Il n’y a encore rien à creuser : pose d’abord une forme pleine."));
+    if (f.kind === "text") add(h("div", { class: "field" }, h("label", {}, "Texte"), h("div", { class: "in" },
+      h("input", { type: "text", value: f.txt ?? "", spellcheck: "false", "data-k": "txt", oninput: (e) => mutate(() => { f.txt = e.target.value; }, true), onchange: () => pushHistory() }))));
+    add(h("h2", {}, "Taille"));
+    for (const [key, label, unit] of fields) add(exprField(label, f, key, unit ?? "mm"));
+    add(h("h2", {}, "Position"));
+    add(exprField("X (gauche, droite)", f, "x", "mm", { def: "0" }), exprField("Y (avant, arrière)", f, "y", "mm", { def: "0" }), exprField("Z (hauteur)", f, "z", "mm", { def: "0" }));
+    const picking = st.pick?.featId === f.id && st.pick.kind === "place";
+    add(h("div", { class: "btnrow" },
+      later && !picking ? h("button", { class: "btn primary", onclick: () => startPick("place", f.id) }, "Poser sur la pièce") : null,
+      h("button", { class: "btn", title: "Tourne la forme de l’autre côté", onclick: () => { mutate(flip); renderProps(); } }, "Retourner")));
+    if (picking) add(h("div", { class: "note ok" }, "Clique sur la pièce : la forme se pose à cet endroit."));
+    add(h("h2", {}, "Rotation"), exprField("Autour de X", f, "rx", "°", { step: 15, def: "0" }), exprField("Autour de Y", f, "ry", "°", { step: 15, def: "0" }), exprField("Autour de Z", f, "rz", "°", { step: 15, def: "0" }));
   }
   if (f.type === "import") {
     add(h("div", { class: "note" }, `Fichier : ${f.file || "?"} (${(f.format || "").toUpperCase()}, ${nf((f.data || "").length * 0.75 / 1024, 0)} Ko)`));
@@ -1561,35 +1739,67 @@ function showBusy(on, text = "Calcul…") { const b = $("#busy"); b.hidden = !on
 function layoutMode() {
   const M = document.querySelector("main");
   M.classList.toggle("asm", isAsm()); M.classList.toggle("editing", !isAsm() && !!(st.editSketch || feat(st.sel)));
-  renderCorner();
+  renderCorner(); renderCoach();
+}
+// Coup de pouce du mode Simple : propose la suite, sans jamais bloquer.
+function renderCoach() {
+  $("#coach")?.remove();
+  if (!isSimple() || isAsm() || st.editSketch || st.sel || st.pick || viewer.pickMode || pref("gabarit-coach") === "0" || !$("#welcome").hidden) return;
+  const has = !!st.mesh || doc.features.length > 0;
+  const steps = has
+    ? [["fillet", "Arrondir les bords"], ["hole", "Percer un trou"], ["shapes", "Ajouter une autre forme"], ["print", "Préparer l’impression 3D"]]
+    : [["shapes", "Poser une forme prête"], ["sketch", "Dessiner ma propre forme"], ["import", "Ouvrir un fichier 3D (STL, 3MF, STEP)"]];
+  $(".stage").append(h("div", { id: "coach", class: "coach" },
+    h("div", { class: "ct" }, h("i", { html: ICONS.bulb }), has ? "Et maintenant ?" : "Par où commencer ?",
+      h("button", { class: "x", title: "Masquer ces conseils", "aria-label": "Masquer ces conseils", onclick: () => { setPref("gabarit-coach", "0"); renderCoach(); } }, "✕")),
+    h("p", {}, has ? "Ta pièce est là. Améliore-la, puis envoie-la à ton imprimante." : "Pose une forme toute faite, ou dessine la tienne."),
+    h("div", { class: "cs" }, steps.map(([k, label]) => h("button", { "data-coach": k, onclick: () => toolAction(k) }, h("span", { html: ICONS[TOOL_ICON[k] || k] }), label)))));
 }
 function renderAll() { layoutMode(); if (isAsm()) { $("#docName").value = doc.name; asmUI.render(); return; } $("#docName").value = doc.name; renderTree(); renderParams(); renderProps(); renderStatus(); renderOverlay(); refreshMarkers(); }
 
 // Accueil au lancement : continuer, nouveau, ouvrir, ou gérer ses pièces récentes.
 function welcome(show) {
-  const w = $("#welcome"); if (!show) { w.hidden = true; return; }
+  const w = $("#welcome"); if (!show) { w.hidden = true; renderCoach(); return; }
   const draw = () => {
     w.innerHTML = "";
     const lib = library();
     const names = Object.keys(lib).sort((a, b) => (lib[b].savedAt || 0) - (lib[a].savedAt || 0) || a.localeCompare(b, "fr"));
     const cur = (isAsm() || doc.features?.length) ? doc.name : null;
     const go = (fn) => { welcome(false); fn(); };
+    const act = (icon, title, sub, fn, cls) => h("button", { class: "act" + (cls ? " " + cls : ""), onclick: fn }, h("span", { class: "ai", html: ICONS[icon] }), h("span", {}, h("b", {}, title), sub ? h("small", {}, sub) : null));
+    const modeCard = (m, icon, title, sub) => h("button", { class: "mode" + (mode === m ? " on" : ""), "data-mode": m, "aria-pressed": mode === m, onclick: () => { setMode(m, true); draw(); } },
+      h("span", { class: "mi", html: ICONS[icon] }), h("span", {}, h("b", {}, title), h("small", {}, sub)), h("span", { class: "dot" }));
     w.append(h("div", { class: "card" },
-      h("h1", {}, "Gabarit"),
-      h("p", {}, "Ton atelier de conception 3D, gratuit et sans compte."),
-      h("div", { class: "btnrow" },
-        cur ? h("button", { class: "btn primary", onclick: () => go(() => {}) }, `Continuer : ${cur}`) : null,
-        h("button", { class: "btn" + (cur ? "" : " primary"), onclick: () => go(() => { openTab(emptyDoc()); toolAction("sketch"); }) }, "Nouvelle pièce"),
-        h("button", { class: "btn", onclick: () => go(() => openTab(emptyAsm())) }, "Nouvel assemblage"),
-        h("button", { class: "btn", onclick: () => go(() => $("#fileIn").click()) }, "Ouvrir un fichier"),
-        h("button", { class: "btn ghost", onclick: () => go(() => openTab(exampleDoc())) }, "Voir l’exemple")),
-      names.length ? h("div", { class: "recents" }, h("h2", {}, "Mes pièces"),
-        ...names.map((n) => h("div", { class: "rec" },
-          h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => openTab(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
-          h("button", { class: "rec-del", title: `Supprimer « ${n} »`, "aria-label": `Supprimer ${n}`, onclick: () => { if (!deletePart(n)) return; draw(); } }, "Supprimer")))) : null));
+      h("div", { class: "hero" },
+        h("div", { class: "logo" }, h("img", { src: $(".brand img").src, alt: "" }), h("h1", {}, "Gabarit")),
+        h("p", { class: "tag" }, "Ton atelier de conception 3D. Gratuit, sans compte, et il marche même hors ligne."),
+        h("h3", {}, "Comment veux-tu travailler ?"),
+        h("div", { class: "modes" },
+          modeCard("simple", "spark", "Simple", "Je découvre : l’essentiel, des formes prêtes et des mots de tous les jours."),
+          modeCard("expert", "pro", "Expert", "J’ai l’habitude de la CAO : tous les outils, esquisses cotées, historique.")),
+        h("div", { class: "foot" }, `Version ${APP_V}. Tu peux changer de mode à tout moment, en haut à droite.`)),
+      h("div", { class: "side" },
+        h("h2", {}, cur ? "Reprendre" : "Commencer"),
+        h("div", { class: "acts" },
+          cur ? act("play", `Continuer : ${cur}`, "Reprends là où tu t’es arrêté", () => go(() => {}), "primary") : null,
+          act("plus", "Nouvelle pièce", isSimple() ? "Pars d’une forme prête ou de ton dessin" : "Commence par une esquisse", () => go(() => { openTab(emptyDoc()); if (!isSimple()) toolAction("sketch"); }), cur ? "" : "primary")),
+        h("div", { class: "acts two", style: "margin-top:6px" },
+          act("folder", "Ouvrir un fichier", "Gabarit, STL, 3MF, STEP", () => go(() => $("#fileIn").click())),
+          act("eye", "Voir l’exemple", "Une pièce toute faite", () => go(() => openTab(exampleDoc()))),
+          isSimple() ? null : act("asm", "Nouvel assemblage", "Réunir plusieurs pièces", () => go(() => openTab(emptyAsm())))),
+        names.length ? h("div", { class: "recents" }, h("h2", {}, "Mes pièces"),
+          ...names.map((n) => h("div", { class: "rec" },
+            h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => openTab(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
+            h("button", { class: "rec-del", title: `Supprimer « ${n} »`, "aria-label": `Supprimer ${n}`, onclick: () => { if (!deletePart(n)) return; draw(); } }, "Supprimer"))))
+          : h("div", { class: "tips" }, h("h2", {}, "Ce que tu peux faire"),
+            ...[["shape", "Poser des formes prêtes", "Boîte, cylindre, engrenage, texte… puis ajouter ou creuser."],
+              ["import", "Reprendre un fichier d’impression 3D", "STL ou 3MF : l’allonger, l’élargir, le tourner, le percer."],
+              ["sketch", "Dessiner à la cote", "Esquisses, contraintes, paramètres : tout reste modifiable."],
+              ["print", "Envoyer à ton imprimante", "Surplombs colorés, pose à plat, export STL, 3MF ou STEP."]]
+              .map(([ic, t, d]) => h("div", { class: "tip" }, h("span", { class: "ti", html: ICONS[ic] }), h("span", {}, h("b", {}, t), h("small", {}, d))))))));
     typoTree(w);
   };
-  draw(); w.hidden = false;
+  draw(); w.hidden = false; renderCoach();
 }
 // Supprime une pièce de « Mes pièces » ; si c'est celle ouverte, on repart d'une pièce vide.
 function deletePart(n) {
@@ -1603,13 +1813,15 @@ function deletePart(n) {
 function help() {
   const dlg = $("#dlg"); dlg.innerHTML = "";
   dlg.append(h("div", { class: "dh" }, "Comment ça marche"), h("div", { class: "db", html: fr(`
+    <h3>Deux modes</h3><p>En haut à droite, choisis <b>Simple</b> (l’essentiel, des formes prêtes, des mots de tous les jours) ou <b>Expert</b> (tous les outils). Tu peux passer de l’un à l’autre à tout moment, ta pièce ne change pas. Le bouton lune ou soleil change le thème.</p>
+    <h3>Formes prêtes</h3><p><b>Formes prêtes</b> pose une boîte, un cylindre, une sphère, un engrenage, un texte… Clique ensuite sur la pièce pour la placer, règle sa taille à gauche, et choisis <b>Ajouter de la matière</b> ou <b>Creuser</b>.</p>
     <h3>1. L’esquisse</h3><p>Clique sur <b>Esquisse</b>, choisis un plan (ou une face de la pièce), puis dessine des rectangles, cercles, rainures, polygones ou un contour libre. Tape les cotes exactes à droite. Une forme placée dans une autre devient un trou.</p>
     <h3>2. Le volume</h3><p><b>Extrusion</b> donne de l’épaisseur, <b>Enlèvement</b> creuse, <b>Révolution</b> fait tourner le profil autour d’un axe (pour les pièces rondes).</p>
     <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
     <h3>Formes avancées</h3><p><b>Plan</b> crée un plan décalé ou incliné pour y dessiner. <b>Lissage</b> relie plusieurs esquisses posées sur des plans différents. <b>Balayage</b> fait glisser un profil le long d’un <b>Chemin</b> (outil de l’esquisse). <b>Dépouille</b> incline des faces. <b>Répétition</b> et <b>Symétrie</b> copient toute la pièce ou seulement les fonctions choisies, en ligne, en grille ou en cercle. Dans un contour libre, tire le rond au milieu d’un côté pour le courber.</p>
     <h3>Plus de fonctions</h3><p>Dans l’esquisse : <b>Ellipse</b>, <b>Courbe</b> (lisse, passe par tes points), <b>Texte</b> (gravé dans un contour, en relief tout seul), et pour une forme choisie : <b>Symétrie</b> et <b>Décalage</b>. Dans la pièce : <b>Ressort</b>, <b>Filetage</b> (clique sur un axe ou un trou, le pas ISO est proposé), <b>Nervure</b> (un simple trait d’esquisse entre deux parois) et, dans une extrusion, <b>Jusqu’à : une face</b>. <b>Autres formats</b> : 3MF, OBJ, et DXF d’une esquisse pour la découpe laser.</p>
     <h3>Gagner du temps</h3><p><b>Ctrl+K</b> (ou « Rechercher ») : tape ce que tu veux faire, par exemple « trou », « arrondir » ou « filet ». <b>Partager</b> donne un lien qui contient toute la pièce. <b>Versions</b> garde des états de ta pièce pour y revenir. Dans les paramètres, <b>+ Variante</b> enregistre un jeu de valeurs (M6, M8…) que tu rappelles en un clic. <b>Impression 3D</b> colore les surplombs à soutenir et pose la pièce à plat automatiquement pour l’export STL et 3MF.</p>
-    <h3>Outils</h3><p><b>Mesurer</b> : clique deux points. <b>Coupe</b> : regarde l’intérieur. <b>Mise en plan</b> : le plan 2D coté de ta pièce, à imprimer ou en PDF. <b>Importer</b> : ajoute une pièce STEP ou STL. Coche « Centre de gravité » en bas pour l’afficher.</p>
+    <h3>Outils</h3><p><b>Mesurer</b> : clique deux points. <b>Coupe</b> : regarde l’intérieur. <b>Mise en plan</b> : le plan 2D coté de ta pièce, à imprimer ou en PDF. <b>Importer</b> : ajoute un fichier STL, 3MF ou STEP, que tu peux ensuite étirer dans un seul sens, tourner et modifier. Coche « Centre de gravité » en bas pour l’afficher.</p>
     <h3>Assemblages</h3><p><b>Nouveau → Assemblage</b>, puis <b>Insérer une pièce</b> : tes pièces sont rangées automatiquement dans <b>Mes pièces</b>. La première pièce est fixe. <b>Coïncidence</b> plaque deux faces planes, <b>Concentrique</b> aligne un axe dans un trou, <b>Distance</b> écarte deux faces. Ensuite : <b>Interférences</b> (les pièces se chevauchent-elles ?), <b>Vue éclatée</b>, <b>Nomenclature</b> (liste des pièces avec masses, exportable en tableur) et export STEP de tout l’assemblage.</p>
     <h3>4. L’historique</h3><p>À gauche, chaque étape reste modifiable : clique dessus et change ses valeurs, la pièce se recalcule. Glisse la ligne bleue « Fin de la pièce » vers le haut pour revenir en arrière dans la construction.</p>
     <h3>5. Les paramètres</h3><p>En bas à gauche, donne un nom à une cote (par exemple <b>longueur</b> = 80) et tape <b>longueur</b> ou <b>longueur/2</b> dans n’importe quelle case. Change la valeur : toute la pièce suit.</p>
@@ -1686,7 +1898,7 @@ viewer.onContext = (e) => {
   m.style.left = Math.min(e.clientX, innerWidth - r.width - 8) + "px"; m.style.top = Math.min(e.clientY, innerHeight - r.height - 8) + "px";
   setTimeout(() => document.addEventListener("pointerdown", closeMenuOutside, true), 0);
 };
-function toolLabel(k) { for (const g of TOOLBAR) for (const [kk, l] of g) if (kk === k) return l; return k; }
+function toolLabel(k) { for (const tb of [toolbar(), TOOLBAR]) for (const [, g] of tb) for (const [kk, l] of g) if (kk === k) return l; return k; }
 // Touche S : boîte à outils sous la souris (outils d'esquisse pendant l'esquisse).
 let mouseAt = [innerWidth / 2, innerHeight / 2];
 document.addEventListener("pointermove", (e) => { mouseAt = [e.clientX, e.clientY]; }, { passive: true });
@@ -1747,7 +1959,7 @@ const extras = createExtras({
   h, $, fr, nf, toast, viewer, st, markTool,
   getDoc: () => doc, loadDoc: (d) => { welcome(false); openTab(d); }, replaceDoc: (d) => { welcome(false); loadDoc(d); }, mutate, renderParams, renderProps,
   setPrintDown: (g) => { if (g) doc.printDown = g; else delete doc.printDown; pushHistory(); },
-  commands: () => commandList(),
+  commands: () => commandList(), publish: () => publishPack(),
 });
 const KEYS = {
   sketch: "dessin profil 2d croquis", extrude: "volume epaisseur bossage tirer", cut: "creuser enlever percer poche", revolve: "tourner tour axe rond",
@@ -1756,10 +1968,16 @@ const KEYS = {
   mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
   draft: "demoulage incliner", import: "step stl ouvrir modele", measure: "distance cote longueur", section: "couper interieur",
   print: "impression imprimante 3d support surplomb orientation trancheur", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
+  shapes: "forme prete primitive boite cube cylindre sphere boule cone tube anneau tore etoile coeur engrenage texte",
 };
 function commandList() {
   const L = [];
-  for (const g of TOOLBAR) for (const [k, label] of g) L.push({ label, hint: TOOL_TIPS[k], keys: KEYS[k], when: () => !isAsm() && !st.editSketch, run: () => toolAction(k) });
+  for (const [, g] of TOOLBAR) for (const [k, label] of g) L.push({ label, hint: TOOL_TIPS[k], keys: KEYS[k], when: () => !isAsm() && !st.editSketch, run: () => toolAction(k) });
+  for (const [k, [label]] of Object.entries(SHAPES)) L.push({ label: `Forme prête : ${label}`, keys: "forme primitive ajouter poser " + k, when: () => !isAsm() && !st.editSketch, run: () => addShape(k) });
+  L.push({ label: "Mode Simple", hint: "L’essentiel, avec des mots de tous les jours", keys: "debutant facile decouvrir", run: () => setMode("simple") },
+    { label: "Mode Expert", hint: "Tous les outils", keys: "avance complet solidworks cao", run: () => setMode("expert") },
+    { label: "Thème sombre", keys: "nuit noir dark couleur", run: () => applyTheme("dark") },
+    { label: "Thème clair", keys: "jour blanc light couleur", run: () => applyTheme("light") });
   for (const [k, label] of SK_ALL) L.push({ label: `Esquisse : ${label}`, keys: "dessiner " + k, when: () => !!st.editSketch, run: () => sketcher.setTool(k) });
   const act = (a) => document.querySelector(`[data-act=${a}]`)?.click();
   L.push(
@@ -1770,6 +1988,7 @@ function commandList() {
     { label: "Partager par lien", keys: "envoyer lien url collaborer", run: () => extras.share() },
     { label: "Versions enregistrées", keys: "historique sauvegarde revenir", run: () => extras.versions() },
     { label: "Exporter en STL", keys: "impression trancheur", run: () => doExport("stl") },
+    { label: "Pack de publication (3MF, STL, images, fiche)", hint: "Tout ce qu’il faut pour partager ta pièce sur un site de modèles 3D", keys: "publier partager makerworld bambu printables thingiverse zip photos", when: () => !isAsm(), run: () => publishPack() },
     { label: "Exporter en 3MF", keys: "impression trancheur bambu prusa cura", run: () => doExport("3mf") },
     { label: "Exporter en STEP", keys: "cao solidworks fusion", run: () => doExport("step") },
     { label: "Exporter en OBJ", keys: "blender rendu", run: () => doExport("obj") },
@@ -1786,7 +2005,7 @@ function commandList() {
 }
 function newDialog() {
   const dlg = $("#dlg"); dlg.innerHTML = "";
-  const go = (d) => { dlg.close(); openTab(d); if (!d.kind) toolAction("sketch"); };
+  const go = (d) => { dlg.close(); openTab(d); if (!d.kind && !isSimple()) toolAction("sketch"); };
   dlg.append(h("div", { class: "dh" }, "Nouveau"), h("div", { class: "db" },
     h("p", {}, "Ton travail actuel reste dans ta bibliothèque (les pièces) ; pense à l’enregistrer en fichier si tu veux le garder ailleurs."),
     h("div", { class: "planes" },
@@ -1853,7 +2072,9 @@ $("#views").append(
 );
 viewer.mountCube($("#views"), (dir) => viewer.fit(dir));
 document.querySelector(".file").addEventListener("click", (e) => {
+  const mb = e.target.closest("[data-mode]"); if (mb) { setMode(mb.dataset.mode); return; }
   const a = e.target.closest("button")?.dataset.act; if (!a) return;
+  if (a === "theme") applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
   if (a === "new") newDialog();
   if (a === "open") $("#fileIn").click();
   if (a === "save") saveFile();
@@ -1888,8 +2109,15 @@ document.addEventListener("keydown", (e) => {
     else viewer.fit(V[e.key]);
     return;
   }
+  // Entrée dans un champ du panneau de réglages : la valeur est prise et l'étape est validée
+  if (typing && e.key === "Enter" && !st.editSketch && !isAsm() && document.activeElement.tagName === "INPUT" && document.activeElement.closest("#props")
+    && (st.pick || (st.sel && feat(st.sel) && feat(st.sel).type !== "sketch"))) {
+    if (document.activeElement.classList.contains("bad")) return;
+    e.preventDefault(); document.activeElement.blur(); validateFeature(); return;
+  }
   if (typing) return;
   if (e.key === "Escape" && $("#menu")) { closeMenu(); return; }
+  if (e.key === "Escape" && $("#shapes")) { closeShapes(); return; }
   if (e.key === "Escape") {
     if (st.editSketch) { if ($("#relBox")) { $("#relBox").remove(); return; } if (!sketcher.cancel()) { st.skSel = null; sketcher.sel = null; sketcher.subs = []; renderProps(); sketcher.render(); } return; }
     if (st.pick) { cancelFeature(); return; }
@@ -1939,6 +2167,7 @@ if (hasSaved) loadDoc(saved); else loadDoc(emptyDoc());
 tabs.list = tabs.list.filter((t) => t && t.id);
 if (!tabs.list.some((t) => t.id === tabs.active)) { const id = newId("t"); tabs.list.push({ id, name: doc.name }); tabs.active = id; saveTabs(); }
 renderTabs();
+applyMode(); applyTheme();
 if (!location.hash.startsWith("#p=")) welcome(true);
 typoTree(document.body);
 startWorker();

@@ -6,7 +6,7 @@ const { chromium } = require("playwright");
   const logs = [];
   p.on("console", (m) => { if (m.type() === "error") logs.push("console: " + m.text()); });
   p.on("pageerror", (e) => logs.push("pageerror: " + e.message + "\n" + e.stack));
-  await p.goto(process.argv[2] || "http://localhost:8765/");
+  await p.goto(process.argv[2] || "http://localhost:8765/?mode=expert");
   await p.waitForFunction(() => window.gabarit, null);
   await p.click("text=Nouvelle pièce");
   await p.click("text=Plan de dessus");
