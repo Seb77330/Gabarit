@@ -38,7 +38,7 @@ const { chromium } = require("playwright");
   await load([box, cyl]);
   ok(await G(() => window.gabarit.viewer.handles.length) === 0, "rien de choisi : pas de flèche");
   await p.click("#tree >> text=Cylindre 1"); await p.waitForTimeout(500); await idle();
-  ok(await G(() => window.gabarit.viewer.handles.map((g) => g.userData.hd.id).join()) === "x,y,z", "forme choisie : trois flèches X, Y, Z");
+  ok(await G(() => window.gabarit.viewer.handles.map((g) => g.userData.hd.id).join()) === "x,y,z,rx,ry,rz", "forme choisie : trois flèches X, Y, Z et trois arcs pour tourner");
   await p.screenshot({ path: "/tmp/claude-0/shots/v11-fleches.png" });
   let tipSeen = "";
   await drag("x", 17.3, { peek: async () => { tipSeen = await G(() => document.querySelector("#dragTip")?.textContent || ""); } });

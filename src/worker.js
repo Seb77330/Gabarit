@@ -27,6 +27,10 @@ self.onmessage = async (ev) => {
       const out = { type: "built", req: msg.req, preview: !!msg.preview, errors: r.errors, info: r.info, mesh, regions: r.regions, regionsOf: msg.regionsOf, ms: performance.now() - t, heap: OC?.wasmMemory?.buffer?.byteLength || 0 };
       const tr = mesh ? [mesh.vertices.buffer, mesh.normals.buffer, mesh.triangles.buffer, mesh.lines.buffer] : [];
       self.postMessage(out, tr);
+    } else if (msg.type === "whose") {
+      // quelle étape a fait la face qui passe par ce point ?
+      const r = await build(msg.doc, { stopAt: msg.stopAt, probe: msg.point });
+      self.postMessage({ type: "whose", req: msg.req, owner: r.owner });
     } else if (msg.type === "asm") {
       const t = performance.now();
       const parts = await buildAssembly(msg.comps);
