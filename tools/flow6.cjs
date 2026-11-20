@@ -62,7 +62,7 @@ const { chromium } = require("playwright");
   const vb = await p.locator("#view").boundingBox(); await p.mouse.click(vb.x + vb.width / 2, vb.y + vb.height / 2); await p.mouse.click(vb.x + vb.width / 2 + 30, vb.y + vb.height / 2 + 10);
   console.log("banner", await p.locator("#banner").innerText().catch(() => "?"));
   await p.keyboard.press("Escape");
-  const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 60000 }), p.click("[data-act=step]")]);
+  const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 60000 }), (async () => { await p.click("[data-act=more]"); await p.click("#dlg .planes button >> nth=0"); })()]);
   const path = await dl.path(); const txt = require("fs").readFileSync(path, "utf8");
   console.log("step", dl.suggestedFilename(), txt.length, (txt.match(/MANIFOLD_SOLID_BREP/g) || []).length, "solids");
   // undo, puis rechargement de la page : l'assemblage revient

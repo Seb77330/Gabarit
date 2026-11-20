@@ -80,3 +80,20 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 | SolidWorks | Gabarit |
 |---|---|
 | Simulation (résistance), rendu photoréaliste, PDM, collaboration | ❌ pour l'instant |
+
+## 8. Là où Gabarit peut faire mieux que SolidWorks
+SolidWorks coûte plusieurs milliers d’euros par an, ne tourne que sur un PC Windows puissant et demande des semaines d’apprentissage. Gabarit joue sur d’autres forces :
+
+| Idée | Pourquoi c’est mieux | État |
+|---|---|---|
+| Gratuit, sans compte, s’ouvre dans un navigateur, marche sans Internet | Aucun installateur, aucune licence, même sur un vieux PC ou un Mac | ✅ |
+| Interface en français courant, aide dans chaque panneau | Pas besoin de formation | ✅ |
+| Paramètres et calculs dans toutes les cases | Aussi souple que les équations de SolidWorks, en plus simple | ✅ |
+| Partage d’une pièce par simple lien (la pièce est dans le lien) | Pas de serveur, pas de compte, la personne ouvre et modifie | ✅ v0.7 |
+| Recherche de commandes en tapant (Ctrl+K) : « trou », « arrondir », « filet M8 » | Plus rapide que de chercher dans les menus | ✅ v0.7 |
+| Pensé pour l’impression 3D : surplombs colorés, pose à plat automatique, export 3MF | SolidWorks vise l’usinage ; ici l’impression 3D est au centre | ✅ v0.7 |
+| Variantes d’une pièce en un clic (familles) | L’équivalent des configurations, sans tableau Excel | ✅ v0.7 |
+| Versions enregistrées avec retour en arrière | Historique sans logiciel de gestion de données | ✅ v0.7 |
+| Bibliothèque de pièces standard paramétriques (vis, écrous, rondelles, roulements) | Sans abonnement à une bibliothèque | 🗓️ |
+| Assistant qui repère les problèmes (paroi trop fine pour l’impression, trou trop près du bord) | Conseils avant d’imprimer | 🗓️ |
+| Travail à plusieurs en direct | Sans serveur payant : à étudier (pair à pair) | 🗓️ |

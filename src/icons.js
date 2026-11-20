@@ -20,6 +20,7 @@ export const ICONS = {
   slot: s('<rect x="3" y="8" width="18" height="8" rx="4"/>'),
   poly: s('<path d="M4 18 7 6l7 4 6-4-2 12z"/><circle cx="4" cy="18" r="1.3" fill="currentColor"/><circle cx="7" cy="6" r="1.3" fill="currentColor"/>'),
   text: s('<path d="M5 6V4h14v2M12 4v16M9 20h6"/>'),
+  print: s('<path d="M4 20h16M7 17h10l-2-5H9z"/><path d="M12 4v5M9.5 6.5L12 9l2.5-2.5"/>'),
   point: s('<path d="M12 6v12M6 12h12"/>'),
   fit: s('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
   plane: s('<path d="M3 16 9 7h12l-6 9z"/><path d="M12 2v6" opacity=".6"/>'),

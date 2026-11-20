@@ -500,9 +500,20 @@ function fineMesh(shape) {
   const m = shape.mesh({ tolerance: size / 5000, angularTolerance: 0.05 });
   return { vertices: m.vertices, triangles: m.triangles };
 }
+// Tourne la pièce pour poser la direction g vers le bas, puis la pose sur z = 0.
+function onBed(shape, g) {
+  const t = [0, 0, -1]; const c = dot(g, t); let s = shape.clone();
+  if (c < 0.999999) {
+    let ax = cross(g, t); if (Math.hypot(...ax) < 1e-9) ax = [1, 0, 0];
+    s = s.rotate(Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI, [0, 0, 0], unit(ax));
+  }
+  const [lo, hi] = s.boundingBox.bounds;
+  return s.translate([-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2, -lo[2]]);
+}
 export function exportShape(kind, opts = {}) {
   if (!lastShape) throw new Error("Rien à exporter : la pièce est vide");
   if (kind === "step") return lastShape.blobSTEP();
+  if (opts.down) { const keep = lastShape; try { lastShape = onBed(keep, opts.down); return exportShape(kind, { ...opts, down: null }); } finally { lastShape = keep; } }
   if (kind === "obj") return objText(fineMesh(lastShape), opts.name || "piece");
   if (kind === "3mf") return threeMF([{ name: opts.name || "piece", ...fineMesh(lastShape) }]);
   const size = sizeOf(lastShape);

@@ -93,7 +93,8 @@ export class Viewer {
     return geo;
   }
   fit(dir) {
-    const bb = this.data ? this.data.bb : this.asmBox ? [this.asmBox.min.toArray(), this.asmBox.max.toArray()] : [[-50, -50, 0], [50, 50, 50]];
+    const pb = this.printDown && this.mesh ? new THREE.Box3().setFromObject(this.part) : null;
+    const bb = pb ? [pb.min.toArray(), pb.max.toArray()] : this.data ? this.data.bb : this.asmBox ? [this.asmBox.min.toArray(), this.asmBox.max.toArray()] : [[-50, -50, 0], [50, 50, 50]];
     const c = new THREE.Vector3((bb[0][0] + bb[1][0]) / 2, (bb[0][1] + bb[1][1]) / 2, (bb[0][2] + bb[1][2]) / 2);
     const r = Math.max(10, Math.hypot(bb[1][0] - bb[0][0], bb[1][1] - bb[0][1], bb[1][2] - bb[0][2]) / 2);
     const v = dir ? new THREE.Vector3(...dir).normalize() : this.camera.position.clone().sub(this.controls.target).normalize();
@@ -235,6 +236,32 @@ export class Viewer {
     g.add(new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({ color: 0x7a3fd1, depthTest: false })));
     for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...d).multiplyScalar(-r * 3), new THREE.Vector3(...d).multiplyScalar(r * 3)]), new THREE.LineBasicMaterial({ color: 0x7a3fd1, depthTest: false })));
     g.children.forEach((c) => (c.renderOrder = 12)); g.position.set(...p); this.cogObj = g; this.scene.add(g);
+  }
+  // ---------- Impression 3D : surplombs en couleur, pièce posée sur sa face d'appui ----------
+  setPrintView(g) {
+    const geo = this.geo; const data = this.data;
+    if (!g || !geo || !data) {
+      if (geo?.getAttribute("color")) geo.deleteAttribute("color");
+      this.mat.vertexColors = false; this.mat.color.set(0xc9d1da); this.mat.needsUpdate = true;
+      this.part.quaternion.identity(); this.printDown = null; return;
+    }
+    const V = data.vertices, N = data.normals, n = V.length / 3;
+    let maxD = -Infinity; for (let i = 0; i < n; i++) maxD = Math.max(maxD, V[i * 3] * g[0] + V[i * 3 + 1] * g[1] + V[i * 3 + 2] * g[2]);
+    const tol = Math.max(0.01, this.size * 1e-4);
+    const col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const c = N[i * 3] * g[0] + N[i * 3 + 1] * g[1] + N[i * 3 + 2] * g[2];
+      const d = V[i * 3] * g[0] + V[i * 3 + 1] * g[1] + V[i * 3 + 2] * g[2];
+      let rgb = [0.79, 0.82, 0.85];
+      if (c > 0.99 && d > maxD - tol) rgb = [0.36, 0.72, 0.45]; // face posée sur le plateau
+      else if (c > 0.7071) rgb = [0.86, 0.25, 0.22]; // surplomb > 45° : support nécessaire
+      else if (c > 0.5) rgb = [0.93, 0.6, 0.25]; // limite
+      col.set(rgb, i * 3);
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    this.mat.vertexColors = true; this.mat.color.set(0xffffff); this.mat.needsUpdate = true;
+    this.part.quaternion.setFromUnitVectors(new THREE.Vector3(...g), new THREE.Vector3(0, 0, -1));
+    this.printDown = g;
   }
   // ---------- Assemblage : un groupe par composant ----------
   setAssembly(list) {

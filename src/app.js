@@ -9,6 +9,7 @@ import { sheetSVG } from "./drawing.js";
 import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
 import { createAssemblyUI } from "./assembly.js";
 import { sketchDXF } from "./dxf.js";
+import { createExtras } from "./extras.js";
 import FONT from "./texte.ttf";
 try { const ff = new FontFace("gabarit-texte", FONT); ff.load().then((f) => { document.fonts.add(f); sketcher?.render(); }).catch(() => {}); } catch { /* aperçu avec la police par défaut */ }
 
@@ -131,6 +132,7 @@ function mutate(fn, transient = false) {
   if (st.editSketch) sketcher.render();
 }
 function loadDoc(d, fit = true) {
+  if (extras?.isPrintOpen()) extras.closePrint();
   const wasAsm = isAsm();
   doc = Object.assign(d.kind === "assembly" ? emptyAsm() : emptyDoc(), d);
   document.body.classList.toggle("asm", isAsm());
@@ -176,7 +178,7 @@ function onWorker(m) {
     st.building = false; showBusy(false);
     if (m.heap > 1.4e9) setTimeout(restartWorker, 50); // libère la mémoire du noyau
     st.errors = m.errors; st.info = m.info; st.mesh = m.mesh; st.lastMs = m.ms;
-    viewer.setMesh(m.mesh);
+    viewer.setMesh(m.mesh); extras.refreshPrint();
     viewer.setCog(st.showCog && m.mesh?.cog ? m.mesh.cog : null);
     if (st.firstFit && m.mesh) { viewer.fit([1, -1.3, 0.9]); st.firstFit = false; }
     if (st.editSketch) updateSketchRefs();
@@ -220,7 +222,7 @@ function doExport(kind) {
   showBusy(true, "Export en cours…");
   const msgs = { step: "Fichier STEP enregistré.", stl: "Fichier STL enregistré, prêt pour ton trancheur.", "3mf": "Fichier 3MF enregistré, prêt pour ton trancheur.", obj: "Fichier OBJ enregistré." };
   pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind}`); toast(msgs[kind]); });
-  worker.postMessage({ type: "export", req, kind, opts: { fine: true, name: doc.name } });
+  worker.postMessage({ type: "export", req, kind, opts: { fine: true, name: doc.name, down: kind !== "step" ? doc.printDown || null : null } });
 }
 const safeName = () => (doc.name || "piece").replace(/[\\/:*?"<>|]+/g, "-").trim() || "piece";
 function download(blob, name) {
@@ -234,7 +236,7 @@ const TOOLBAR = [
   [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"], ["helix", "Ressort"]],
   [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"]],
   [["mirror", "Symétrie"], ["pattern", "Répétition"], ["import", "Importer"]],
-  [["measure", "Mesurer"], ["section", "Coupe"], ["drawing", "Mise en plan"]],
+  [["measure", "Mesurer"], ["section", "Coupe"], ["print", "Impression 3D"], ["drawing", "Mise en plan"]],
 ];
 function renderTools() {
   const t = $("#tools"); t.innerHTML = "";
@@ -264,12 +266,15 @@ const TOOL_TIPS = {
   measure: "Mesurer une distance entre deux points de la pièce",
   section: "Couper la vue pour voir l’intérieur",
   drawing: "Créer le plan 2D de la pièce, à imprimer ou en PDF",
+  print: "Voir les surplombs à soutenir et poser la pièce à plat automatiquement",
 };
 function toolAction(k) {
   if (st.editSketch) { toast("Termine d’abord l’esquisse en cours."); return; }
   if (k === "measure") { toggleMeasure(); return; }
   if (k === "section") { toggleSection(); return; }
   if (k === "drawing") { openDrawing(); return; }
+  if (k === "print") { extras.printPanel(); return; }
+  if (extras.isPrintOpen()) extras.closePrint();
   stopPick(); stopMeasure();
   if (k === "plane") { choosePlane((base) => { insertFeature({ id: newId("f"), type: "plane", name: nextName("plane"), base, offset: "10", rot: "x", angle: "0" }); }, "Le nouveau plan part de quel plan ?"); return; }
   if (k === "import") { importFile(); return; }
@@ -550,6 +555,7 @@ function deleteFeature(id) {
 // ---------- Paramètres (variables) ----------
 function renderParams() {
   const box = $("#params"); box.innerHTML = "";
+  const vb = extras.variantBox(); if (vb) box.append(vb);
   if (!doc.params.length) { box.append(h("div", { class: "param-empty" }, "Donne un nom à une cote (par exemple « longueur ») pour la réutiliser partout : tape longueur ou longueur/2 dans n’importe quelle case.")); return; }
   const v = varsMap(doc.params);
   doc.params.forEach((p, i) => {
@@ -1216,6 +1222,7 @@ function help() {
     <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
     <h3>Formes avancées</h3><p><b>Plan</b> crée un plan décalé ou incliné pour y dessiner. <b>Lissage</b> relie plusieurs esquisses posées sur des plans différents. <b>Balayage</b> fait glisser un profil le long d’un <b>Chemin</b> (outil de l’esquisse). <b>Dépouille</b> incline des faces. <b>Répétition</b> et <b>Symétrie</b> copient toute la pièce ou seulement les fonctions choisies, en ligne, en grille ou en cercle. Dans un contour libre, tire le rond au milieu d’un côté pour le courber.</p>
     <h3>Plus de fonctions</h3><p>Dans l’esquisse : <b>Ellipse</b>, <b>Courbe</b> (lisse, passe par tes points), <b>Texte</b> (gravé dans un contour, en relief tout seul), et pour une forme choisie : <b>Symétrie</b> et <b>Décalage</b>. Dans la pièce : <b>Ressort</b>, <b>Filetage</b> (clique sur un axe ou un trou, le pas ISO est proposé), <b>Nervure</b> (un simple trait d’esquisse entre deux parois) et, dans une extrusion, <b>Jusqu’à : une face</b>. <b>Autres formats</b> : 3MF, OBJ, et DXF d’une esquisse pour la découpe laser.</p>
+    <h3>Gagner du temps</h3><p><b>Ctrl+K</b> (ou « Rechercher ») : tape ce que tu veux faire, par exemple « trou », « arrondir » ou « filet ». <b>Partager</b> donne un lien qui contient toute la pièce. <b>Versions</b> garde des états de ta pièce pour y revenir. Dans les paramètres, <b>+ Variante</b> enregistre un jeu de valeurs (M6, M8…) que tu rappelles en un clic. <b>Impression 3D</b> colore les surplombs à soutenir et pose la pièce à plat automatiquement pour l’export STL et 3MF.</p>
     <h3>Outils</h3><p><b>Mesurer</b> : clique deux points. <b>Coupe</b> : regarde l’intérieur. <b>Mise en plan</b> : le plan 2D coté de ta pièce, à imprimer ou en PDF. <b>Importer</b> : ajoute une pièce STEP ou STL. Coche « Centre de gravité » en bas pour l’afficher.</p>
     <h3>Assemblages</h3><p><b>Nouveau → Assemblage</b>, puis <b>Insérer une pièce</b> : tes pièces sont rangées automatiquement dans <b>Mes pièces</b>. La première pièce est fixe. <b>Coïncidence</b> plaque deux faces planes, <b>Concentrique</b> aligne un axe dans un trou, <b>Distance</b> écarte deux faces. Ensuite : <b>Interférences</b> (les pièces se chevauchent-elles ?), <b>Vue éclatée</b>, <b>Nomenclature</b> (liste des pièces avec masses, exportable en tableur) et export STEP de tout l’assemblage.</p>
     <h3>4. L’historique</h3><p>À gauche, chaque étape reste modifiable : clique dessus et change ses valeurs, la pièce se recalcule. Glisse la ligne bleue « Fin de la pièce » vers le haut pour revenir en arrière dans la construction.</p>
@@ -1248,6 +1255,47 @@ const asmUI = createAssemblyUI({
   request: (m, cb) => { const req = ++exportReq; pendingExport.set(req, cb); worker.postMessage({ ...m, req }); },
   material: (k) => MATERIALS[k] || MATERIALS.pla,
 });
+const extras = createExtras({
+  h, $, fr, nf, toast, viewer, st, markTool,
+  getDoc: () => doc, loadDoc: (d) => { welcome(false); loadDoc(d); }, mutate, renderParams, renderProps,
+  setPrintDown: (g) => { if (g) doc.printDown = g; else delete doc.printDown; pushHistory(); },
+  commands: () => commandList(),
+});
+const KEYS = {
+  sketch: "dessin profil 2d croquis", extrude: "volume epaisseur bossage tirer", cut: "creuser enlever percer poche", revolve: "tourner tour axe rond",
+  hole: "trou percer vis fraisage lamage", fillet: "arrondi arrondir rayon conge", chamfer: "biseau casser angle", shell: "evider creux boite paroi",
+  thread: "filet filetage vis taraud taraudage m3 m4 m5 m6 m8 m10 m12", helix: "ressort helice spirale", rib: "renfort raidisseur gousset",
+  mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
+  draft: "demoulage incliner", import: "step stl ouvrir modele", measure: "distance cote longueur", section: "couper interieur",
+  print: "impression imprimante 3d support surplomb orientation trancheur", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
+};
+function commandList() {
+  const L = [];
+  for (const g of TOOLBAR) for (const [k, label] of g) L.push({ label, hint: TOOL_TIPS[k], keys: KEYS[k], when: () => !isAsm() && !st.editSketch, run: () => toolAction(k) });
+  for (const [k, label] of SK_TOOLS) L.push({ label: `Esquisse : ${label}`, keys: "dessiner " + k, when: () => !!st.editSketch, run: () => sketcher.setTool(k) });
+  const act = (a) => document.querySelector(`[data-act=${a}]`)?.click();
+  L.push(
+    { label: "Nouvelle pièce ou nouvel assemblage", keys: "nouveau creer", run: () => newDialog() },
+    { label: "Mes pièces", keys: "bibliotheque liste", run: () => libraryDialog() },
+    { label: "Ouvrir un fichier", keys: "charger", run: () => act("open") },
+    { label: "Enregistrer le fichier .gabarit", keys: "sauver sauvegarder", run: () => saveFile() },
+    { label: "Partager par lien", keys: "envoyer lien url collaborer", run: () => extras.share() },
+    { label: "Versions enregistrées", keys: "historique sauvegarde revenir", run: () => extras.versions() },
+    { label: "Exporter en STL", keys: "impression trancheur", run: () => doExport("stl") },
+    { label: "Exporter en 3MF", keys: "impression trancheur bambu prusa cura", run: () => doExport("3mf") },
+    { label: "Exporter en STEP", keys: "cao solidworks fusion", run: () => doExport("step") },
+    { label: "Exporter en OBJ", keys: "blender rendu", run: () => doExport("obj") },
+    { label: "Exporter une esquisse en DXF", keys: "laser cnc decoupe", run: () => moreFormats() },
+    { label: "Ajouter un paramètre", keys: "variable cote nommee", when: () => !isAsm(), run: () => addParam() },
+    { label: "Annuler", keys: "ctrl z retour", run: () => undo() },
+    { label: "Rétablir", keys: "ctrl y refaire", run: () => redo() },
+    { label: "Vue : recadrer", keys: "zoom tout voir", run: () => viewer.fit() },
+    { label: "Vue : 3D", keys: "iso perspective", run: () => viewer.fit([1, -1.3, 0.9]) },
+    { label: "Vue : face", run: () => viewer.fit([0, -1, 0]) }, { label: "Vue : dessus", run: () => viewer.fit([0, 0, 1]) }, { label: "Vue : droite", run: () => viewer.fit([1, 0, 0]) },
+    { label: "Aide", keys: "comment aide tutoriel", run: () => help() },
+  );
+  return L;
+}
 function newDialog() {
   const dlg = $("#dlg"); dlg.innerHTML = "";
   const go = (d) => { dlg.close(); loadDoc(d); if (!d.kind) toolAction("sketch"); };
@@ -1270,6 +1318,7 @@ function moreFormats() {
   };
   dlg.append(h("div", { class: "dh" }, "Autres formats"), h("div", { class: "db" },
     h("div", { class: "planes" },
+      h("button", { class: "btn", onclick: () => go("step") }, h("b", {}, "STEP"), " : pour les autres logiciels de CAO (Fusion, FreeCAD, Onshape…), la forme exacte"),
       h("button", { class: "btn", onclick: () => go("3mf") }, h("b", {}, "3MF"), " : pour l’impression 3D (Bambu Studio, PrusaSlicer, Cura), plus précis que le STL"),
       h("button", { class: "btn", onclick: () => go("obj") }, h("b", {}, "OBJ"), " : pour Blender, les moteurs de jeu et le rendu")),
     sks.length ? h("div", {},
@@ -1328,6 +1377,9 @@ document.querySelector(".file").addEventListener("click", (e) => {
   if (a === "help") help();
   if (a === "lib") libraryDialog();
   if (a === "more") moreFormats();
+  if (a === "share") extras.share();
+  if (a === "versions") extras.versions();
+  if (a === "search") extras.palette();
   if (a === "install") installApp();
 });
 $(".params-box").addEventListener("click", (e) => { if (e.target.closest("[data-act=addParam]")) addParam(); });
@@ -1338,6 +1390,7 @@ document.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataT
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName);
   const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); extras.palette(); return; }
   if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { if (!typing) { e.preventDefault(); undo(); } return; }
   if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { if (!typing) { e.preventDefault(); redo(); } return; }
   if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); return; }
@@ -1373,5 +1426,7 @@ if (saved && (saved.kind === "assembly" || (Array.isArray(saved.features) && (sa
 else { loadDoc(emptyDoc()); welcome(true); }
 typoTree(document.body);
 startWorker();
+extras.openFromHash();
+window.addEventListener("hashchange", () => extras.openFromHash());
 window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, exampleDoc, emptyAsm, library, addToLibrary, asmUI };
 if ("launchQueue" in window) window.launchQueue.setConsumer(async (p) => { for (const fh of p.files || []) openFile(await fh.getFile()); });

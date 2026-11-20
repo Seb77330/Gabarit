@@ -38,7 +38,7 @@ const { chromium } = require("playwright");
   console.log("vol", await G(() => [Math.round(window.gabarit.st.mesh.volume), window.gabarit.st.errors]));
   for (const k of ["3mf", "obj"]) {
     await p.click("[data-act=more]");
-    const [d2] = await Promise.all([p.waitForEvent("download", { timeout: 60000 }), p.click(`#dlg .planes button >> nth=${k === "3mf" ? 0 : 1}`)]);
+    const [d2] = await Promise.all([p.waitForEvent("download", { timeout: 60000 }), p.click(`#dlg .planes button >> nth=${k === "3mf" ? 1 : 2}`)]);
     const buf = require("fs").readFileSync(await d2.path());
     console.log(k, d2.suggestedFilename(), buf.length, buf.slice(0, 4).toString("latin1"));
     if (k === "3mf") require("fs").writeFileSync("/tmp/claude-0/test.3mf", buf);
