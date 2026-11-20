@@ -179,6 +179,7 @@ export class Sketcher {
       if (mi >= 0 && !e.shiftKey && sub?.kind === "seg") this.drag = { kind: "bend", i: mi, start: [e.clientX, e.clientY] };
       this.render(); return;
     }
+    if (t === "convert") { const ed = this.edgeAt(e); if (ed) this.convertEdge(ed); this.hoverEdge = null; this.render(); return; }
     const { p } = this.snap(e, this.draft?.pts?.at(-1) || this.draft?.a);
     if (this.draft?.click) { this.draft.b = p; this.makeFromDraft(); return; }
     if (hasPts(t)) {
@@ -200,6 +201,7 @@ export class Sketcher {
       this.pan = [this.drag.pan[0] - (e.clientX - this.drag.start[0]) / this.zoom, this.drag.pan[1] + (e.clientY - this.drag.start[1]) / this.zoom];
       this.render(); return;
     }
+    if (this.tool === "convert" && !this.drag) { this.hoverEdge = this.edgeAt(e); this.cursor = null; this.render(); return; }
     const sn = this.snap(e, this.draft?.pts?.at(-1) || this.draft?.a);
     this.cursor = sn;
     if (this.drag?.kind === "move") {
@@ -395,6 +397,65 @@ export class Sketcher {
       el("circle", { cx: p[0], cy: p[1], r: this.cursor.key ? 6 : 3, class: this.cursor.key ? "snap key" : "snap" }, svg);
       const t = el("text", { x: p[0] + 10, y: p[1] - 10, class: "coord" }, svg); t.textContent = `${fmt(this.cursor.p[0])} ; ${fmt(this.cursor.p[1])}`;
     }
+    if (this.tool === "convert" && this.hoverEdge) {
+      const q = this.hoverEdge.pts.map((r) => this.toS(r));
+      el("path", { d: "M" + q.map((r) => r[0].toFixed(1) + " " + r[1].toFixed(1)).join("L"), class: "ref-hot" }, svg);
+    }
+    this.api.onView?.();
+  }
+  // Arête de la pièce (projetée) la plus proche du pointeur.
+  edgeAt(e) {
+    const p = this.toW(e), tol = 8 / this.zoom; let best = null, bd = tol;
+    for (const ed of this.refs.edges || []) {
+      const P = ed.pts;
+      for (let i = 0; i + 1 < P.length; i++) {
+        const a = P[i], b = P[i + 1], abx = b[0] - a[0], aby = b[1] - a[1], l2 = abx * abx + aby * aby;
+        const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / l2)) : 0;
+        const d = Math.hypot(p[0] - a[0] - t * abx, p[1] - a[1] - t * aby);
+        if (d < bd || (best && Math.abs(d - bd) < 1e-9 && ed.flat && !best.flat)) { bd = d; best = ed; }
+      }
+    }
+    return best;
+  }
+  // Reprend une arête de la pièce comme entité d'esquisse (cercle, contour fermé ou chemin raccordé).
+  convertEdge(ed) {
+    const r6 = (v) => Math.round(v * 1e4) / 1e4;
+    let P = ed.pts.map((q) => [r6(q[0]), r6(q[1])]);
+    const span = Math.max(1e-6, ...P.map((q) => Math.hypot(q[0] - P[0][0], q[1] - P[0][1])));
+    if (span < 1e-3) return false; // arête vue en bout : un simple point
+    const eps = Math.max(1e-4, span * 1e-4);
+    const same = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= eps;
+    P = P.filter((q, i) => i === 0 || !same(q, P[i - 1]));
+    const closedLoop = (Q) => Q.length >= 4 && same(Q[0], Q.at(-1));
+    const asLoop = (Q) => {
+      const ring = Q.slice(0, -1);
+      const cx = ring.reduce((a, q) => a + q[0], 0) / ring.length, cy = ring.reduce((a, q) => a + q[1], 0) / ring.length;
+      const rs = ring.map((q) => Math.hypot(q[0] - cx, q[1] - cy)), rm = rs.reduce((a, b) => a + b, 0) / rs.length;
+      if (ring.length >= 8 && rm > 0 && rs.every((x) => Math.abs(x - rm) < rm * 0.01)) return { type: "circle", cx: r6(cx), cy: r6(cy), d: r6(2 * rm) };
+      return { type: "poly", pts: ring, r: 0 };
+    };
+    if (closedLoop(P)) { this.commitNew(asLoop(P)); return true; }
+    // raccorde aux chemins déjà repris qui touchent une extrémité
+    const sk = this.api.getSketch();
+    let merged = P, absorbed = [];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const ent of sk.entities || []) {
+        if (ent.type !== "path" || !ent.fromPart || absorbed.includes(ent.id)) continue;
+        const Q = ent.pts.map((q) => [Number(q[0]), Number(q[1])]);
+        if (same(merged.at(-1), Q[0])) merged = merged.concat(Q.slice(1));
+        else if (same(merged.at(-1), Q.at(-1))) merged = merged.concat(Q.slice(0, -1).reverse());
+        else if (same(merged[0], Q.at(-1))) merged = Q.slice(0, -1).concat(merged);
+        else if (same(merged[0], Q[0])) merged = Q.slice(1).reverse().concat(merged);
+        else continue;
+        absorbed.push(ent.id); changed = true;
+      }
+    }
+    const ent = closedLoop(merged) ? asLoop(merged) : { type: "path", pts: merged, fromPart: true };
+    if (absorbed.length) this.api.update((s2) => { s2.entities = s2.entities.filter((x) => !absorbed.includes(x.id)); s2.constraints = (s2.constraints || []).filter((c) => (c.refs || []).every((r) => !absorbed.includes(r.e))); });
+    this.commitNew(ent);
+    return true;
   }
   drawSubs(ev) {
     const byId = new Map(ev.map((o) => [o.id, o]));

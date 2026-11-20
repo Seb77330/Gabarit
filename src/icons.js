@@ -36,6 +36,7 @@ export const ICONS = {
   rib: s('<path d="M4 20V5h3v12h13v3z"/><path d="M7 15l9-8" stroke-width="3"/>'),
   thread: s('<rect x="8" y="3" width="8" height="18" rx="1"/><path d="M8 7l8 2M8 11l8 2M8 15l8 2"/>'),
   helix: s('<path d="M7 4c10 0 10 3 0 3s-10 3 0 3 10 3 0 3-10 3 0 3 10 3 0 3"/>'),
+  convert: s('<path d="M4 20V8l8-4 8 4v12" stroke-dasharray="3 2"/><path d="M8 20v-8h8v8"/>'),
   path: s('<path d="M4 18c3-9 7 2 10-6 1-3 3-5 6-6"/><circle cx="4" cy="18" r="1.3" fill="currentColor"/><circle cx="20" cy="6" r="1.3" fill="currentColor"/>'),
   done: s('<path d="M5 12l5 5 9-10"/>'),
 };

@@ -42,7 +42,10 @@ export class Viewer {
     el.addEventListener("pointermove", (e) => this.onMove(e));
     el.addEventListener("pointerup", (e) => { if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 5) this.onClick(e); down = null; });
     el.addEventListener("pointerleave", () => this.clearHover());
-    const loop = () => { this.controls.update(); this.renderer.render(this.scene, this.camera); requestAnimationFrame(loop); };
+    this.sketchCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100000);
+    this.sketchCam.add(d1.clone(), d2.clone()); this.scene.add(this.sketchCam);
+    this.sketchView = null;
+    const loop = () => { if (!this.sketchView) this.controls.update(); this.renderer.render(this.scene, this.sketchView ? this.sketchCam : this.camera); requestAnimationFrame(loop); };
     loop();
   }
   resize() {
@@ -60,7 +63,7 @@ export class Viewer {
     this.helpers.add(mk([1, 0, 0], 0xd23f3f), mk([0, 1, 0], 0x3d9a4a), mk([0, 0, 1], 0x3a6fd8));
   }
   setMesh(data) {
-    this.part.clear(); this.asm = null; this.asmBox = null; this.data = data; this.faceMeshes = new Map(); this.edgeObjs = [];
+    this.part.clear(); this.selFaceObj = null; this.asm = null; this.asmBox = null; this.data = data; this.faceMeshes = new Map(); this.edgeObjs = [];
     if (!data) return;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(data.vertices, 3));
@@ -183,8 +186,29 @@ export class Viewer {
       }
     }
   }
+  // Vue d'esquisse : caméra orthogonale face au plan, calée sur le zoom de l'éditeur 2D.
+  // v = { pl: {origin,x,y,n}, cu, cv, zoom } (cu, cv = point du plan au centre de la vue ; zoom = pixels par mm)
+  setSketchView(v) {
+    this.sketchView = v || null;
+    if (!v) return;
+    const w = this.host.clientWidth || 1, h = this.host.clientHeight || 1, c = this.sketchCam;
+    c.left = -w / 2 / v.zoom; c.right = w / 2 / v.zoom; c.top = h / 2 / v.zoom; c.bottom = -h / 2 / v.zoom;
+    const o = v.pl.origin, X = v.pl.x, Y = v.pl.y, N = v.pl.n;
+    const P = [0, 1, 2].map((k) => o[k] + X[k] * v.cu + Y[k] * v.cv);
+    const D = this.size * 4 + 1000;
+    c.position.set(P[0] + N[0] * D, P[1] + N[1] * D, P[2] + N[2] * D);
+    c.up.set(...Y); c.lookAt(P[0], P[1], P[2]);
+    c.near = 0.1; c.far = D * 2; c.updateProjectionMatrix();
+  }
+  // Face mise en évidence (clic simple, hors outil).
+  highlightFace(faceId) {
+    if (this.selFaceObj) { this.part.remove(this.selFaceObj); this.selFaceObj = null; }
+    if (faceId === null || faceId === undefined || !this.data) return;
+    const geo = this.faceGeometry(faceId); if (!geo) return;
+    this.selFaceObj = new THREE.Mesh(geo, this.selMat); this.part.add(this.selFaceObj);
+  }
   onClick(e) {
-    if (!this.pickMode) return;
+    if (!this.pickMode) { this.onFreeClick?.(e); return; }
     if (this.pickMode.kind === "asm") { const h = this.asmHit(e); if (h) this.pickMode.onPick(h); return; }
     if (this.pickMode.kind === "measure") { const h = this.hitFace(e) || this.hitEdge(e); if (h) this.pickMode.onPick({ ...h, ...this.snapPoint(e, h.point) }); return; }
     if (this.pickMode.kind === "edge") { const h = this.hitEdge(e); if (h) this.pickMode.onPick(h); }
