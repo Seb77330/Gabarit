@@ -9,6 +9,8 @@ import { sheetSVG } from "./drawing.js";
 import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
 import { createAssemblyUI } from "./assembly.js";
 import { sketchDXF } from "./dxf.js";
+import FONT from "./texte.ttf";
+try { const ff = new FontFace("gabarit-texte", FONT); ff.load().then((f) => { document.fonts.add(f); sketcher?.render(); }).catch(() => {}); } catch { /* aperçu avec la police par défaut */ }
 
 const $ = (s, r = document) => r.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => {
@@ -872,7 +874,7 @@ function constraintPanel(f) {
 }
 
 // ---------- Mode esquisse ----------
-const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"]];
+const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"]];
 const SK_HINTS = {
   select: "Clique sur une forme pour la choisir, puis glisse-la ou modifie ses cotes à droite. Molette : zoom. Clic droit ou glisser dans le vide : déplacer la vue.",
   rect: "Glisse d’un coin à l’autre (ou clique deux fois). Maj : sans accroche.",
@@ -880,6 +882,7 @@ const SK_HINTS = {
   slot: "Clique au premier centre, puis au second. Règle la largeur à droite.",
   polygon: "Clique au centre, puis sur un sommet.",
   poly: "Clique chaque point. Pour fermer : reclique sur le premier point, double-clique, ou Entrée. Ensuite, tire le rond au milieu d’un côté pour le courber en arc.",
+  text: "Clique où le texte doit commencer, puis tape-le à droite. Dans un contour, il est gravé à travers ; seul, il donne des lettres en relief.",
   ellipse: "Clique au centre, puis au coin du rectangle qui l’entoure.",
   spline: "Courbe lisse qui passe par chaque point cliqué. Reclique sur le premier point pour la fermer, ou double-clique (Entrée) pour la laisser ouverte, par exemple pour un balayage.",
   path: "Chemin ouvert pour un balayage : clique chaque point, puis double-clique ou Entrée pour finir.",
@@ -936,7 +939,7 @@ function renderSketchTools() {
     h("button", { class: "tbtn on", onclick: () => closeSketch() }, h("span", { html: ICONS.done }), "Terminer"));
   $("#skHint").textContent = fr(SK_HINTS[sketcher.tool] || "");
 }
-const ENT_LABELS = { rect: "Rectangle", circle: "Cercle", polygon: "Polygone", slot: "Rainure", poly: "Contour libre", path: "Chemin", point: "Point", ellipse: "Ellipse", spline: "Courbe" };
+const ENT_LABELS = { rect: "Rectangle", circle: "Cercle", polygon: "Polygone", slot: "Rainure", poly: "Contour libre", path: "Chemin", point: "Point", ellipse: "Ellipse", spline: "Courbe", text: "Texte" };
 function renderSketchProps(P) {
   const f = feat(st.editSketch); if (!f) return;
   P.append(h("div", { class: "head" }, h("span", { class: "ic", html: ICONS.sketch }), h("input", { value: f.name, onchange: (e) => mutate(() => { f.name = e.target.value.trim() || f.name; }) })));
@@ -952,6 +955,10 @@ function renderSketchProps(P) {
     if (e.type === "circle") P.append(F("Diamètre", "d"), F("Centre X", "cx"), F("Centre Y", "cy"));
     if (e.type === "polygon") P.append(F("Nombre de côtés", "n", ""), F("Diamètre (cercle extérieur)", "d"), F("Centre X", "cx"), F("Centre Y", "cy"), F("Rotation", "a", "°", { step: 15 }));
     if (e.type === "slot") P.append(F("Largeur", "w"), F("Centre 1 : X", "x1"), F("Centre 1 : Y", "y1"), F("Centre 2 : X", "x2"), F("Centre 2 : Y", "y2"));
+    if (e.type === "text") {
+      const ti = h("input", { type: "text", value: e.txt ?? "", oninput: (ev) => mutate(() => { e.txt = ev.target.value; }, true), onchange: () => pushHistory() });
+      P.append(h("div", { class: "field" }, h("label", {}, "Texte"), h("div", { class: "in" }, ti)), F("Hauteur des majuscules", "h"), F("Départ X", "cx"), F("Départ Y", "cy"), F("Rotation", "a", "°", { step: 15 }));
+    }
     if (e.type === "ellipse") P.append(F("Demi-axe a", "rx"), F("Demi-axe b", "ry"), F("Centre X", "cx"), F("Centre Y", "cy"), F("Rotation", "a", "°", { step: 15 }));
     if (e.type === "spline") P.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!e.closed, onchange: (ev) => { mutate(() => { e.closed = ev.target.checked; }); renderProps(); } }), "Courbe fermée"));
     if (e.type === "poly" || e.type === "path" || e.type === "spline") {
@@ -1142,7 +1149,7 @@ function drawingDialog(views) {
   const side = h("div", { class: "sheet-side" },
     ctl("Format", sel("format", [["A4", "A4 paysage"], ["A3", "A3 paysage"]])),
     ctl("Échelle", sel("scale", [["auto", "Automatique"], ...[10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02].map((v) => [v, v >= 1 ? `${v} : 1` : `1 : ${Math.round(1 / v)}`])])),
-    chk("hidden", "Arêtes cachées en pointillé"), chk("dims", "Cotes d’encombrement"), chk("iso", "Vue en perspective"),
+    chk("hidden", "Arêtes cachées en pointillé"), chk("dims", "Cotes (encombrement et trous)"), chk("iso", "Vue en perspective"),
     ctl("Dessiné par", h("input", { type: "text", value: opts.author || "", oninput: (e) => { opts.author = e.target.value; save(); redraw(); } })),
     h("div", { class: "btnrow" },
       h("button", { class: "btn primary", onclick: () => printSheet(current) }, "Imprimer ou PDF"),
@@ -1208,7 +1215,7 @@ function help() {
     <h3>2. Le volume</h3><p><b>Extrusion</b> donne de l’épaisseur, <b>Enlèvement</b> creuse, <b>Révolution</b> fait tourner le profil autour d’un axe (pour les pièces rondes).</p>
     <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
     <h3>Formes avancées</h3><p><b>Plan</b> crée un plan décalé ou incliné pour y dessiner. <b>Lissage</b> relie plusieurs esquisses posées sur des plans différents. <b>Balayage</b> fait glisser un profil le long d’un <b>Chemin</b> (outil de l’esquisse). <b>Dépouille</b> incline des faces. <b>Répétition</b> et <b>Symétrie</b> copient toute la pièce ou seulement les fonctions choisies, en ligne, en grille ou en cercle. Dans un contour libre, tire le rond au milieu d’un côté pour le courber.</p>
-    <h3>Plus de fonctions</h3><p>Dans l’esquisse : <b>Ellipse</b>, <b>Courbe</b> (lisse, passe par tes points), et pour une forme choisie : <b>Symétrie</b> et <b>Décalage</b>. Dans la pièce : <b>Ressort</b>, <b>Filetage</b> (clique sur un axe ou un trou, le pas ISO est proposé), <b>Nervure</b> (un simple trait d’esquisse entre deux parois) et, dans une extrusion, <b>Jusqu’à : une face</b>. <b>Autres formats</b> : 3MF, OBJ, et DXF d’une esquisse pour la découpe laser.</p>
+    <h3>Plus de fonctions</h3><p>Dans l’esquisse : <b>Ellipse</b>, <b>Courbe</b> (lisse, passe par tes points), <b>Texte</b> (gravé dans un contour, en relief tout seul), et pour une forme choisie : <b>Symétrie</b> et <b>Décalage</b>. Dans la pièce : <b>Ressort</b>, <b>Filetage</b> (clique sur un axe ou un trou, le pas ISO est proposé), <b>Nervure</b> (un simple trait d’esquisse entre deux parois) et, dans une extrusion, <b>Jusqu’à : une face</b>. <b>Autres formats</b> : 3MF, OBJ, et DXF d’une esquisse pour la découpe laser.</p>
     <h3>Outils</h3><p><b>Mesurer</b> : clique deux points. <b>Coupe</b> : regarde l’intérieur. <b>Mise en plan</b> : le plan 2D coté de ta pièce, à imprimer ou en PDF. <b>Importer</b> : ajoute une pièce STEP ou STL. Coche « Centre de gravité » en bas pour l’afficher.</p>
     <h3>Assemblages</h3><p><b>Nouveau → Assemblage</b>, puis <b>Insérer une pièce</b> : tes pièces sont rangées automatiquement dans <b>Mes pièces</b>. La première pièce est fixe. <b>Coïncidence</b> plaque deux faces planes, <b>Concentrique</b> aligne un axe dans un trou, <b>Distance</b> écarte deux faces. Ensuite : <b>Interférences</b> (les pièces se chevauchent-elles ?), <b>Vue éclatée</b>, <b>Nomenclature</b> (liste des pièces avec masses, exportable en tableur) et export STEP de tout l’assemblage.</p>
     <h3>4. L’historique</h3><p>À gauche, chaque étape reste modifiable : clique dessus et change ses valeurs, la pièce se recalcule. Glisse la ligne bleue « Fin de la pièce » vers le haut pour revenir en arrière dans la construction.</p>

@@ -191,6 +191,7 @@ export class Sketcher {
       this.render(); return;
     }
     if (t === "point") { this.commitNew({ type: "point", cx: p[0], cy: p[1] }); return; }
+    if (t === "text") { this.commitNew({ type: "text", txt: "Texte", cx: p[0], cy: p[1], h: Math.max(1, this.snapStep * 5), a: 0 }); this.setTool("select"); return; }
     this.draft = { type: t, a: p, b: p, dragging: true };
     this.render();
   }
@@ -349,6 +350,12 @@ export class Sketcher {
     for (const ent of ev) {
       const cls = "ent" + (ent.id === this.sel ? " sel" : "") + (ent.construction ? " constr" : "");
       if (ent.type === "point") { const p = this.toS([ent.cx, ent.cy]); el("circle", { cx: p[0], cy: p[1], r: 4, class: cls + " pt" }, svg); continue; }
+      if (ent.type === "text") {
+        const p = this.toS([ent.cx, ent.cy]);
+        const t = el("text", { x: 0, y: 0, class: cls + " sktext", "font-size": (ent.h / 0.73) * this.zoom, transform: `translate(${p[0]} ${p[1]}) rotate(${-(ent.a || 0)})` }, svg); t.textContent = ent.txt;
+        if (ent.id === this.sel) { const q = outline(ent).map((r) => this.toS(r)); el("path", { d: "M" + q.map((r) => r.join(" ")).join("L") + "Z", class: "tbox" }, svg); this.drawDims(ent); }
+        continue;
+      }
       const pts = outline(ent).map((p) => this.toS(p));
       el("path", { d: "M" + pts.map((p) => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L") + (isOpen(ent) ? "" : "Z"), class: cls + (isOpen(ent) ? " open" : "") }, svg);
       if (ent.id === this.sel) this.drawDims(ent);
@@ -459,6 +466,8 @@ export class Sketcher {
       const P = (x, y) => [o.cx + x * c - y * s, o.cy + x * s + y * c];
       this.dimLine(P(-hw, hh), P(hw, hh), -22, fmt(o.w), "w");
       this.dimLine(P(hw, hh), P(hw, -hh), -22, fmt(o.h), "h");
+    } else if (o.type === "text") {
+      this.label([o.cx - 4 / this.zoom * 6, o.cy + o.h / 2], "h " + fmt(o.h), "h");
     } else if (o.type === "ellipse") {
       const r = (o.a || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
       this.dimLine([o.cx, o.cy], [o.cx + o.rx * c, o.cy + o.rx * sn], 0, "a " + fmt(o.rx), "rx");

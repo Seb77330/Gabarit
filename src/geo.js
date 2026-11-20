@@ -58,6 +58,7 @@ export const ENT_FIELDS = {
   point: ["cx", "cy"],
   ellipse: ["cx", "cy", "rx", "ry", "a"],
   spline: [],
+  text: ["cx", "cy", "h", "a"],
 };
 export const hasPts = (t) => t === "poly" || t === "path" || t === "spline";
 export const isOpen = (o) => o.type === "path" || (o.type === "spline" && !o.closed);
@@ -70,6 +71,7 @@ export function evalEntity(e, vars) {
     o[f] = raw === undefined || raw === "" ? 0 : evalExpr(raw, vars);
   }
   if (e.type === "spline") o.closed = !!e.closed;
+  if (e.type === "text") o.txt = String(e.txt ?? "");
   if (hasPts(e.type)) o.pts = (e.pts || []).map((p) => [evalExpr(p[0], vars), evalExpr(p[1], vars), p[2] === undefined || p[2] === "" ? 0 : evalExpr(p[2], vars)]);
   return o;
 }
@@ -83,6 +85,7 @@ export function checkEntity(o) {
   if (o.type === "poly" && o.pts.length < 2) throw new Error("Un contour libre demande au moins 2 points");
   if (o.type === "poly" && o.pts.length === 2 && !o.pts.some((p) => p[2])) throw new Error("Avec 2 points, courbe au moins un côté");
   if (o.type === "path" && o.pts.length < 2) throw new Error("Un chemin demande au moins 2 points");
+  if (o.type === "text") { pos(o.h, "La hauteur du texte"); if (!o.txt.trim()) throw new Error("Le texte est vide"); }
   if (o.type === "ellipse") { pos(o.rx, "Le demi-axe 1"); pos(o.ry, "Le demi-axe 2"); }
   if (o.type === "spline" && o.pts.length < (o.closed ? 3 : 2)) throw new Error(o.closed ? "Une courbe fermée demande au moins 3 points" : "Une courbe demande au moins 2 points");
 }
@@ -113,9 +116,15 @@ export function outline(o) {
   }
   if (o.type === "poly") return segPts(o.pts, true);
   if (o.type === "path") return segPts(o.pts, false);
+  if (o.type === "text") { const w = textWidth(o.txt, o.h); return [[0, -0.3 * o.h], [w, -0.3 * o.h], [w, 1.02 * o.h], [0, 1.02 * o.h]].map((p) => rot(p, o.a || 0, [o.cx, o.cy])); }
   if (o.type === "ellipse") { const out = []; for (let i = 0; i < 72; i++) { const t = i / 72 * Math.PI * 2; out.push(rot([o.rx * Math.cos(t), o.ry * Math.sin(t)], o.a || 0, [o.cx, o.cy])); } return out; }
   if (o.type === "spline") { const segs = bezierSegs(o.pts, o.closed); const out = [segs[0]?.[0] || o.pts[0]]; for (const [p0, c1, c2, p1] of segs) for (let i = 1; i <= 12; i++) { const t = i / 12, u = 1 - t; out.push([0, 1].map((k) => u * u * u * p0[k] + 3 * u * u * t * c1[k] + 3 * u * t * t * c2[k] + t * t * t * p1[k])); } if (o.closed) out.pop(); return out; }
   return [];
+}
+// Largeur approchée d'un texte (police grasse) pour l'aperçu et l'imbrication.
+export function textWidth(txt, h) {
+  let w = 0; for (const ch of txt) w += /[iIjl.,;:!'|]/.test(ch) ? 0.34 : /[mwMW@]/.test(ch) ? 1.0 : ch === " " ? 0.35 : /[A-Z]/.test(ch) ? 0.76 : /[0-9]/.test(ch) ? 0.7 : 0.64;
+  return (w * h) / 0.73;
 }
 // Courbe lisse passant par tous les points (Catmull-Rom convertie en segments de Bézier cubiques).
 export function bezierSegs(pts, closed) {

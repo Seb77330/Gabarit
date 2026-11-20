@@ -15,6 +15,7 @@ export function sketchDXF(entities, vars) {
   for (const e of entities) {
     const o = evalEntity(e, vars); const layer = o.construction ? "CONSTRUCTION" : "CONTOUR";
     if (o.type === "point") { out.push("0", "POINT", "8", layer, "10", n(o.cx), "20", n(o.cy), "30", "0"); continue; }
+    if (o.type === "text") { const t = [...o.txt].map((ch) => (ch.charCodeAt(0) < 128 ? ch : "\\U+" + ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0"))).join(""); out.push("0", "TEXT", "8", layer, "10", n(o.cx), "20", n(o.cy), "30", "0", "40", n(o.h), "1", t, "50", n(o.a || 0)); continue; }
     if (o.type === "circle") { out.push("0", "CIRCLE", "8", layer, "10", n(o.cx), "20", n(o.cy), "30", "0", "40", n(o.d / 2)); continue; }
     if (o.type === "poly" || o.type === "path") {
       const closed = o.type === "poly";

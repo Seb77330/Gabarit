@@ -13,7 +13,7 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 | Contraintes géométriques (horizontal, vertical, parallèle, perpendiculaire, égal, tangent, coïncident, symétrique, fixe) et solveur, degrés de liberté | ✅ v0.3 |
 | Chemins ouverts (pour balayage) | ✅ v0.2 |
 | Splines (courbes lisses), ellipses | ✅ v0.5 |
-| Texte | 🗓️ |
+| Texte (gravé ou en relief, accents compris) | ✅ v0.6 |
 | Miroir d'esquisse, décalage d'entités | ✅ v0.5 |
 | Convertir les entités, ajuster/prolonger, répétition d'esquisse | 🗓️ (aujourd'hui : arêtes projetées en pointillé et accroche) |
 | Esquisse 3D | ❌ |
@@ -65,7 +65,8 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 |---|---|
 | Vues standard (face, dessus, droite, iso), arêtes cachées | ✅ v0.2 |
 | Cartouche, échelle, export PDF | ✅ v0.2 |
-| Cotation automatique, coupes, détails, nomenclature | 🗓️ |
+| Cotation automatique : encombrement, axes, diamètres des trous, positions des trous | ✅ v0.6 |
+| Vues en coupe, vues de détail, nomenclature sur le plan | 🗓️ |
 
 ## 6. Assemblages
 | SolidWorks | Gabarit |

@@ -3,6 +3,9 @@ import * as R from "replicad";
 import { evalExpr, varsMap } from "./expr.js";
 import { solveSketch } from "./constraints.js";
 import { objText, threeMF } from "./meshfiles.js";
+import FONT from "./texte.ttf";
+let fontReady = null;
+const ensureFont = () => (fontReady ||= R.loadFont(FONT.buffer.slice(FONT.byteOffset, FONT.byteOffset + FONT.byteLength), "gabarit"));
 import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, toWorld, cross, dot, norm, bezierSegs, outline } from "./geo.js";
 
 let lastShape = null;
@@ -33,6 +36,10 @@ function entityDrawing(o) {
     d = d.translate(o.cx, o.cy);
   } else if (o.type === "spline") {
     d = wireDrawing(o);
+  } else if (o.type === "text") {
+    d = R.drawText(o.txt, { startX: 0, startY: 0, fontSize: o.h / 0.73, fontFamily: "gabarit" });
+    if (o.a) d = d.rotate(o.a, [0, 0]);
+    d = d.translate(o.cx, o.cy);
   } else if (o.type === "poly") {
     let pen = R.draw(o.pts[0].slice(0, 2));
     const n = o.pts.length;
@@ -277,6 +284,7 @@ function patternTransforms(f, vars) {
 function decodeB64(b64) { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
 
 export async function build(doc, opts = {}) {
+  if (doc.features.some((f) => f.type === "sketch" && (f.entities || []).some((e) => e.type === "text"))) await ensureFont();
   const vars = varsMap(doc.params);
   const errors = {}, sketches = {}, info = {}, tools = {};
   let shape = null;
@@ -502,6 +510,30 @@ export function exportShape(kind, opts = {}) {
 }
 
 // Vues 2D pour la mise en plan (arêtes visibles et cachées).
+// Cercles vus de face (trous et cylindres dont l'axe regarde la vue), en coordonnées de la vue.
+function viewCircles(cam) {
+  const dir = unit([cam.direction.x, cam.direction.y, cam.direction.z]), xA = unit([cam.xAxis.x, cam.xAxis.y, cam.xAxis.z]);
+  const yA = cross(dir, xA); const out = [];
+  const oc = R.getOC();
+  for (const fc of lastShape.faces) {
+    if (fc.geomType !== "CYLINDRE") continue;
+    try {
+      const ad = new oc.BRepAdaptor_Surface(fc.wrapped, true); const cy = ad.Cylinder(); const ax = cy.Axis();
+      const l = ax.Location(), d = ax.Direction(); const p = [l.X(), l.Y(), l.Z()], dv = [d.X(), d.Y(), d.Z()], r = cy.Radius(); ad.delete();
+      if (Math.abs(dot(dv, dir)) < 0.9999) continue;
+      // seulement les cylindres complets (pas les congés, qui sont des morceaux de cylindre)
+      const ts = []; for (const ed of fc.edges) for (const q of [ed.startPoint, ed.endPoint]) ts.push(dot(v3.sub([q.x, q.y, q.z], p), dv));
+      const L = Math.max(...ts) - Math.min(...ts);
+      if (!(L > 1e-6) || R.measureArea(fc) < 0.97 * 2 * Math.PI * r * L) continue;
+      const e = fc.edges[0]; const q = e.startPoint; const qp = [q.x, q.y, q.z];
+      const w = v3.sub(qp, p); const radial = v3.sub(w, v3.mul(dv, dot(w, dv)));
+      const nv = fc.normalAt(q); const hole = dot([nv.x, nv.y, nv.z], radial) < 0;
+      const u = dot(p, xA), v = dot(p, yA);
+      if (!out.some((c) => Math.abs(c.u - u) < 1e-4 && Math.abs(c.v - v) < 1e-4 && Math.abs(c.r - r) < 1e-4)) out.push({ u, v, r, hole });
+    } catch { /* face ignorée */ }
+  }
+  return out;
+}
 export function drawingViews(names = ["front", "top", "right", "iso"]) {
   if (!lastShape) throw new Error("Rien à mettre en plan : la pièce est vide");
   const cams = {
@@ -518,7 +550,7 @@ export function drawingViews(names = ["front", "top", "right", "iso"]) {
     const { visible, hidden } = R.drawProjection(lastShape, cams[n]);
     const bb = visible.boundingBox;
     const paths = (d) => { try { return [].concat(...[d.toSVGPaths()].flat(2)); } catch { return []; } };
-    out[n] = { visible: paths(visible), hidden: paths(hidden), bounds: bb.bounds };
+    out[n] = { visible: paths(visible), hidden: paths(hidden), bounds: bb.bounds, circles: n === "iso" ? [] : viewCircles(cams[n]) };
   }
   return out;
 }

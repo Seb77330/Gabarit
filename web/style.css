@@ -205,3 +205,6 @@ table.bom { border-collapse: collapse; width: 100%; font-size: 13px; }
 table.bom th, table.bom td { border-bottom: 1px solid var(--line, #dde2e8); padding: 6px 8px; text-align: left; }
 table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 @media (max-width: 1600px) { .tools .tbtn { min-width: 54px; padding: 6px 3px 5px; } }
+.ent.sktext { font-family: "gabarit-texte", "DejaVu Sans", Verdana, sans-serif; font-weight: 700; fill: #2f6fb540; stroke-width: 1.2; paint-order: stroke; }
+.ent.sktext.sel { fill: #c4552b33; }
+.tbox { fill: none; stroke: var(--accent); stroke-dasharray: 4 3; stroke-width: 1; vector-effect: non-scaling-stroke; }

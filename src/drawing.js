@@ -44,7 +44,7 @@ export function sheetSVG(views, meta) {
     out.push(`</g>`);
     const sz = size(v);
     out.push(`<text x="${px + sz.w * s / 2}" y="${key === "front" ? py + sz.h * s + 6 : py - 3}" font-size="3" text-anchor="middle" fill="#333">${esc(label)}</text>`);
-    return { x: px, y: py, w: sz.w * s, h: sz.h * s, rw: sz.w, rh: sz.h };
+    return { x: px, y: py, w: sz.w * s, h: sz.h * s, rw: sz.w, rh: sz.h, b, s, v, P: (u, vv) => [px + (u - b[0][0]) * s, py + (b[1][1] - vv) * s] };
   };
   const dim = (x1, y1, x2, y2, off, value, vertical) => {
     // cote avec flèches, décalée de off (mm sur la feuille)
@@ -61,6 +61,38 @@ export function sheetSVG(views, meta) {
       out.push(`<text transform="translate(${x - 1} ${(y1 + y2) / 2}) rotate(-90)" font-size="3.2" text-anchor="middle">${n1(value)}</text>`);
     }
   };
+  // Cotation automatique des trous : axes, diamètres et positions.
+  function holeDims(list, vt, vf) {
+    for (const V of list) {
+      const cs = V.v.circles || []; if (!cs.length) continue;
+      const groups = new Map();
+      for (const c of cs) {
+        const [X, Y] = V.P(c.u, c.v); const R = c.r * V.s;
+        // axes de centrage
+        out.push(`<path d="M${X - R - 1.5} ${Y}H${X + R + 1.5}M${X} ${Y - R - 1.5}V${Y + R + 1.5}" stroke="#000" stroke-width="0.13" stroke-dasharray="3 0.8 0.6 0.8"/>`);
+        const k = (c.hole ? "h" : "b") + Math.round(c.r * 2000);
+        if (!groups.has(k)) groups.set(k, { c, n: 0, X, Y, R }); groups.get(k).n++;
+      }
+      let i = 0;
+      for (const g of groups.values()) {
+        if (g.R < 0.6) continue;
+        const ang = -Math.PI / 4; const sx = g.X + g.R * Math.cos(ang), sy = g.Y + g.R * Math.sin(ang);
+        const ex = Math.max(sx + 6, V.x + V.w + 11), ey = Math.min(sy - 4, V.y + 4) + i * 5; i++;
+        const label = `${g.n > 1 ? g.n + " × " : ""}⌀${n1(g.c.r * 2)}`;
+        out.push(`<path d="M${sx} ${sy}L${ex} ${ey}H${ex + label.length * 1.75}" stroke="#000" stroke-width="0.2" fill="none"/><path d="M${sx} ${sy}l${1.4} ${-0.4}l${-0.6} ${1.2}z" fill="#000" transform="rotate(${-45} ${sx} ${sy})"/>`);
+        out.push(`<text x="${ex + 0.5}" y="${ey - 0.8}" font-size="3">${esc(label)}</text>`);
+      }
+    }
+    // positions des trous dans la vue qui en montre le plus (dessus, sinon face)
+    const V = [vt, vf].filter(Boolean).sort((a, b) => (b.v.circles || []).filter((c) => c.hole).length - (a.v.circles || []).filter((c) => c.hole).length)[0];
+    const holes = (V?.v.circles || []).filter((c) => c.hole); if (!holes.length) return;
+    const uniq = (arr) => arr.sort((a, b) => a - b).filter((x, j, a) => j === 0 || Math.abs(x - a[j - 1]) > 1e-3);
+    const b = V.b; const us = uniq(holes.map((c) => c.u)).filter((u) => Math.abs(u - b[0][0]) > 1e-3).slice(0, 4);
+    const vs = uniq(holes.map((c) => c.v)).filter((v) => Math.abs(v - b[0][1]) > 1e-3).slice(0, 4);
+    const [x0, yb] = V.P(b[0][0], b[0][1]);
+    us.forEach((u, j) => { const [X] = V.P(u, 0); dim(x0, yb, X, yb, 7 + j * 5.5, u - b[0][0], false); });
+    vs.forEach((v, j) => { const [, Y] = V.P(0, v); dim(x0, Y, x0, yb, -7 - j * 5.5, v - b[0][1], true); });
+  }
   const vf = drawView("front", "Vue de face");
   const vt = drawView("top", "Vue de dessus");
   const vr = drawView("right", "Vue de droite");
@@ -70,6 +102,7 @@ export function sheetSVG(views, meta) {
     if (vf) dim(vf.x + vf.w, vf.y, vf.x + vf.w, vf.y + vf.h, 7, vf.rh, true);
     if (vt) dim(vt.x + vt.w, vt.y, vt.x + vt.w, vt.y + vt.h, 7, vt.rh, true);
   }
+  if (meta.dims) holeDims([vf, vt, vr].filter(Boolean), vt, vf);
   // cartouche
   const tx = W - m - tbW, ty = H - m - tbH;
   out.push(`<g stroke="#000" stroke-width="0.35" fill="none"><rect x="${tx}" y="${ty}" width="${tbW}" height="${tbH}"/>
