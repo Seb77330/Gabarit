@@ -167,6 +167,7 @@ export class Viewer {
   onMove(e) {
     if (!this.pickMode) return;
     this.clearHover();
+    if (this.pickMode.kind === "measure") return;
     if (this.pickMode.kind === "edge") {
       const h = this.hitEdge(e); if (h) { this.hoverEdge = h.obj; h.obj.material = this.edgeHot; }
     } else {
@@ -178,8 +179,56 @@ export class Viewer {
   }
   onClick(e) {
     if (!this.pickMode) return;
+    if (this.pickMode.kind === "measure") { const h = this.hitFace(e) || this.hitEdge(e); if (h) this.pickMode.onPick({ ...h, ...this.snapPoint(e, h.point) }); return; }
     if (this.pickMode.kind === "edge") { const h = this.hitEdge(e); if (h) this.pickMode.onPick(h); }
     else { const h = this.hitFace(e); if (h) this.pickMode.onPick(h); }
+  }
+  // Plans de référence affichés comme des carrés translucides.
+  setPlanes(list) {
+    if (this.planeGroup) this.scene.remove(this.planeGroup);
+    this.planeGroup = new THREE.Group();
+    for (const p of list) {
+      const s = p.size / 2; const o = new THREE.Vector3(...p.origin), x = new THREE.Vector3(...p.x).multiplyScalar(s), y = new THREE.Vector3(...p.y).multiplyScalar(s);
+      const c = [o.clone().sub(x).sub(y), o.clone().add(x).sub(y), o.clone().add(x).add(y), o.clone().sub(x).add(y)];
+      const g = new THREE.BufferGeometry().setFromPoints([c[0], c[1], c[2], c[0], c[2], c[3]]);
+      const col = p.active ? 0xc4552b : 0x2f6fb5;
+      this.planeGroup.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: p.active ? 0.18 : 0.08, side: THREE.DoubleSide, depthWrite: false })));
+      this.planeGroup.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(c), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.7 })));
+    }
+    this.scene.add(this.planeGroup);
+  }
+  // Vue en coupe : plan de coupe perpendiculaire à un axe.
+  setSection(sec) {
+    this.renderer.localClippingEnabled = !!sec;
+    const planes = sec ? [new THREE.Plane(new THREE.Vector3(...{ x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }[sec.axis]).multiplyScalar(sec.flip ? 1 : -1), sec.flip ? -sec.pos : sec.pos)] : [];
+    for (const m of [this.mat, this.edgeMat, this.hoverMat, this.selMat, this.edgeHot]) { m.clippingPlanes = planes; m.needsUpdate = true; }
+    this.section = sec;
+  }
+  // Accroche aux extrémités d'arêtes (en pixels), pour la mesure.
+  snapPoint(e, p) {
+    if (!this.data) return { p, snapped: false };
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    const L = this.data.lines; const v = new THREE.Vector3(); let best = null, bd = 12;
+    const test = (i) => { v.set(L[i], L[i + 1], L[i + 2]); const q = v.clone().project(this.camera); const sx = (q.x + 1) / 2 * r.width, sy = (1 - q.y) / 2 * r.height; const d = Math.hypot(sx - mx, sy - my); if (d < bd && q.z < 1) { bd = d; best = v.toArray(); } };
+    for (const g of this.data.edgeGroups) { test(g.start * 3); test((g.start + g.count - 1) * 3); }
+    return best ? { p: best, snapped: true } : { p, snapped: false };
+  }
+  setMeasure(pts) {
+    if (this.measureGroup) this.scene.remove(this.measureGroup);
+    this.measureGroup = new THREE.Group();
+    const r = this.size / 140;
+    for (const p of pts) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8), new THREE.MeshBasicMaterial({ color: 0x1b8f5a, depthTest: false })); m.position.set(...p); m.renderOrder = 11; this.measureGroup.add(m); }
+    if (pts.length === 2) this.measureGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts.map((p) => new THREE.Vector3(...p))), new THREE.LineBasicMaterial({ color: 0x1b8f5a, depthTest: false })));
+    this.scene.add(this.measureGroup);
+  }
+  setCog(p) {
+    if (this.cogObj) this.scene.remove(this.cogObj);
+    this.cogObj = null; if (!p) return;
+    const g = new THREE.Group(); const r = this.size / 90;
+    g.add(new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({ color: 0x7a3fd1, depthTest: false })));
+    for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...d).multiplyScalar(-r * 3), new THREE.Vector3(...d).multiplyScalar(r * 3)]), new THREE.LineBasicMaterial({ color: 0x7a3fd1, depthTest: false })));
+    g.children.forEach((c) => (c.renderOrder = 12)); g.position.set(...p); this.cogObj = g; this.scene.add(g);
   }
   snapshot() { return this.renderer.domElement.toDataURL("image/png"); }
 }

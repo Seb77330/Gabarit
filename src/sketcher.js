@@ -1,5 +1,5 @@
 // Éditeur d'esquisse 2D (SVG) : tracé, accroche à la grille, cotes, déplacement.
-import { evalEntity, outline, ENT_FIELDS } from "./geo.js";
+import { evalEntity, outline, segPts, ENT_FIELDS } from "./geo.js";
 import { varsMap } from "./expr.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -18,7 +18,7 @@ export class Sketcher {
     svg.addEventListener("pointerup", (e) => this.up(e));
     svg.addEventListener("dblclick", (e) => {
       e.preventDefault();
-      if (this.draft?.type === "poly") { this.finishPoly(); return; }
+      if (this.draft?.type === "poly" || this.draft?.type === "path") { this.finishPoly(); return; }
       const g = this.dimAt(e); if (g && this.sel) this.editDim(g);
     });
     svg.addEventListener("wheel", (e) => {
@@ -57,7 +57,7 @@ export class Sketcher {
     for (const o of this.evaluated()) {
       if (o.type === "circle" || o.type === "polygon" || o.type === "rect" || o.type === "point") pts.push([o.cx, o.cy]);
       if (o.type === "slot") pts.push([o.x1, o.y1], [o.x2, o.y2]);
-      if (o.type === "poly") pts.push(...o.pts);
+      if (o.type === "poly" || o.type === "path") pts.push(...o.pts.map((p) => [p[0], p[1]]));
       if (o.type === "rect" && !o.r) pts.push(...outline(o));
       if (o.type === "polygon") pts.push(...outline(o));
     }
@@ -84,7 +84,7 @@ export class Sketcher {
     for (const o of this.evaluated()) {
       if (o.type === "point") { const d = Math.hypot(o.cx - p[0], o.cy - p[1]); if (d < bd) { bd = d; best = o.id; } continue; }
       const pts = outline(o);
-      for (let i = 0; i < pts.length; i++) {
+      for (let i = 0; i < pts.length - (o.type === "path" ? 1 : 0); i++) {
         const a = pts[i], b = pts[(i + 1) % pts.length];
         const dx = b[0] - a[0], dy = b[1] - a[1]; const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
         const d = Math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
@@ -93,10 +93,27 @@ export class Sketcher {
     }
     return best;
   }
+  // Poignée au milieu d'un côté : on la tire pour courber le côté en arc.
+  midHandles(o) {
+    const n = o.pts.length, out = [];
+    for (let i = 0; i < (o.type === "path" ? n - 1 : n); i++) {
+      const a = o.pts[i], b = o.pts[(i + 1) % n];
+      const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, sg = a[2] || 0;
+      out.push({ i, p: [(a[0] + b[0]) / 2 - dy / L * sg, (a[1] + b[1]) / 2 + dx / L * sg], a, b });
+    }
+    return out;
+  }
+  hitMid(e) {
+    if (!this.sel) return -1;
+    const o = this.evaluated().find((x) => x.id === this.sel); if (!o || (o.type !== "poly" && o.type !== "path")) return -1;
+    const p = this.toW(e); const tol = 7 / this.zoom;
+    const hit = this.midHandles(o).find((m) => Math.hypot(m.p[0] - p[0], m.p[1] - p[1]) < tol);
+    return hit ? hit.i : -1;
+  }
   hitVertex(e) {
     if (!this.sel) return -1;
     const ent = this.api.getSketch().entities.find((x) => x.id === this.sel);
-    if (!ent || ent.type !== "poly") return -1;
+    if (!ent || (ent.type !== "poly" && ent.type !== "path")) return -1;
     const o = this.evaluated().find((x) => x.id === this.sel); if (!o) return -1;
     const p = this.toW(e); const tol = 7 / this.zoom;
     return o.pts.findIndex((q) => Math.hypot(q[0] - p[0], q[1] - p[1]) < tol);
@@ -109,6 +126,8 @@ export class Sketcher {
     if (t === "select") {
       const vi = this.hitVertex(e);
       if (vi >= 0) { this.drag = { kind: "vertex", i: vi }; return; }
+      const mi = this.hitMid(e);
+      if (mi >= 0) { this.drag = { kind: "bend", i: mi }; return; }
       const id = this.hitEntity(e);
       this.sel = id; this.api.select(id);
       if (id) {
@@ -119,11 +138,11 @@ export class Sketcher {
     }
     const { p } = this.snap(e, this.draft?.pts?.at(-1) || this.draft?.a);
     if (this.draft?.click) { this.draft.b = p; this.makeFromDraft(); return; }
-    if (t === "poly") {
-      if (!this.draft) this.draft = { type: "poly", pts: [p], cur: p };
+    if (t === "poly" || t === "path") {
+      if (!this.draft) this.draft = { type: t, pts: [p], cur: p };
       else {
         const f = this.draft.pts[0];
-        if (this.draft.pts.length >= 3 && Math.hypot(f[0] - p[0], f[1] - p[1]) * this.zoom < 9) { this.finishPoly(); return; }
+        if (t === "poly" && this.draft.pts.length >= 3 && Math.hypot(f[0] - p[0], f[1] - p[1]) * this.zoom < 9) { this.finishPoly(); return; }
         const last = this.draft.pts.at(-1); if (last[0] !== p[0] || last[1] !== p[1]) this.draft.pts.push(p);
       }
       this.render(); return;
@@ -149,13 +168,23 @@ export class Sketcher {
         const sh = (k, d) => { const v = Number(String(o[k]).replace(",", ".")); if (isFinite(v)) ent[k] = num(v + d); };
         if ("cx" in o) { sh("cx", dx); sh("cy", dy); }
         if (o.type === "slot") { sh("x1", dx); sh("y1", dy); sh("x2", dx); sh("y2", dy); }
-        if (o.type === "poly") ent.pts = o.pts.map((q) => { const x = Number(q[0]), y = Number(q[1]); return [isFinite(x) ? num(x + dx) : q[0], isFinite(y) ? num(y + dy) : q[1]]; });
+        if (o.type === "poly" || o.type === "path") ent.pts = o.pts.map((q) => { const x = Number(q[0]), y = Number(q[1]); const r = [isFinite(x) ? num(x + dx) : q[0], isFinite(y) ? num(y + dy) : q[1]]; if (q[2]) r.push(q[2]); return r; });
       }, true);
+      return;
+    }
+    if (this.drag?.kind === "bend") {
+      const id = this.sel, i = this.drag.i; const o = this.evaluated().find((x) => x.id === id); if (!o) return;
+      const a = o.pts[i], b = o.pts[(i + 1) % o.pts.length]; const p = this.toW(e);
+      const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1;
+      let sg = ((p[0] - (a[0] + b[0]) / 2) * -dy + (p[1] - (a[1] + b[1]) / 2) * dx) / L;
+      if (Math.abs(sg) * this.zoom < 5) sg = 0;
+      sg = Math.max(-L / 2, Math.min(L / 2, e.shiftKey ? sg : Math.round(sg / (this.snapStep / 2)) * (this.snapStep / 2)));
+      this.api.update((sk) => { const ent = sk.entities.find((x) => x.id === id); if (!ent) return; const q = ent.pts[i]; ent.pts[i] = [q[0], q[1], num(sg)]; if (!sg) ent.pts[i] = [q[0], q[1]]; }, true);
       return;
     }
     if (this.drag?.kind === "vertex") {
       const id = this.sel, i = this.drag.i;
-      this.api.update((sk) => { const ent = sk.entities.find((x) => x.id === id); if (ent) ent.pts[i] = [sn.p[0], sn.p[1]]; }, true);
+      this.api.update((sk) => { const ent = sk.entities.find((x) => x.id === id); if (ent) ent.pts[i] = ent.pts[i][2] ? [sn.p[0], sn.p[1], ent.pts[i][2]] : [sn.p[0], sn.p[1]]; }, true);
       return;
     }
     if (this.draft) {
@@ -165,7 +194,7 @@ export class Sketcher {
   }
   up(e) {
     const d = this.drag; this.drag = null;
-    if (d && (d.kind === "move" || d.kind === "vertex")) { this.api.update(() => {}, false); return; }
+    if (d && (d.kind === "move" || d.kind === "vertex" || d.kind === "bend")) { this.api.update(() => {}, false); return; }
     if (!this.draft || this.draft.type === "poly" || !this.draft.dragging) return;
     const { a, b } = this.draft;
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -188,9 +217,9 @@ export class Sketcher {
     this.commitNew(ent);
   }
   finishPoly() {
-    const pts = this.draft.pts; this.draft = null;
-    if (pts.length < 3) { this.render(); return; }
-    this.commitNew({ type: "poly", pts, r: 0 });
+    const pts = this.draft.pts, type = this.draft.type; this.draft = null;
+    if (pts.length < (type === "path" ? 2 : 3)) { this.render(); return; }
+    this.commitNew(type === "path" ? { type, pts } : { type: "poly", pts, r: 0 });
   }
   commitNew(ent) {
     ent.id = newId("e");
@@ -249,15 +278,18 @@ export class Sketcher {
       const cls = "ent" + (ent.id === this.sel ? " sel" : "") + (ent.construction ? " constr" : "");
       if (ent.type === "point") { const p = this.toS([ent.cx, ent.cy]); el("circle", { cx: p[0], cy: p[1], r: 4, class: cls + " pt" }, svg); continue; }
       const pts = outline(ent).map((p) => this.toS(p));
-      el("path", { d: "M" + pts.map((p) => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L") + "Z", class: cls }, svg);
+      el("path", { d: "M" + pts.map((p) => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L") + (ent.type === "path" ? "" : "Z"), class: cls + (ent.type === "path" ? " open" : "") }, svg);
       if (ent.id === this.sel) this.drawDims(ent);
-      if (ent.id === this.sel && ent.type === "poly") for (const q of ent.pts) { const p = this.toS(q); el("rect", { x: p[0] - 4, y: p[1] - 4, width: 8, height: 8, class: "handle" }, svg); }
+      if (ent.id === this.sel && (ent.type === "poly" || ent.type === "path")) {
+        for (const m of this.midHandles(ent)) { const p = this.toS(m.p); el("circle", { cx: p[0], cy: p[1], r: 4, class: "handle mid" }, svg); }
+        for (const q of ent.pts) { const p = this.toS(q); el("rect", { x: p[0] - 4, y: p[1] - 4, width: 8, height: 8, class: "handle" }, svg); }
+      }
     }
     // brouillon
     const dr = this.draft;
     if (dr) {
       const c = this.cursor?.p;
-      if (dr.type === "poly") {
+      if (dr.type === "poly" || dr.type === "path") {
         const pts = [...dr.pts, dr.cur || c].filter(Boolean).map((p) => this.toS(p));
         el("path", { d: "M" + pts.map((p) => p.join(" ")).join("L"), class: "draft" }, svg);
         const last = dr.pts.at(-1), cur = dr.cur || c;
@@ -309,8 +341,13 @@ export class Sketcher {
     } else if (o.type === "slot") {
       this.dimLine([o.x1, o.y1], [o.x2, o.y2], 0, fmt(Math.hypot(o.x2 - o.x1, o.y2 - o.y1)));
       this.label([o.x2 + o.w * 0.7, o.y2 + o.w * 0.7], "l " + fmt(o.w), "w");
-    } else if (o.type === "poly") {
-      for (let i = 0; i < o.pts.length; i++) { const a = o.pts[i], b = o.pts[(i + 1) % o.pts.length]; this.label([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], fmt(Math.hypot(b[0] - a[0], b[1] - a[1]))); }
+    } else if (o.type === "poly" || o.type === "path") {
+      const n = o.pts.length;
+      for (let i = 0; i < (o.type === "path" ? n - 1 : n); i++) {
+        const a = o.pts[i], b = o.pts[(i + 1) % n]; if (a[2]) continue;
+        const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1; const off = 14 / this.zoom;
+        this.label([(a[0] + b[0]) / 2 + dy / L * off, (a[1] + b[1]) / 2 - dx / L * off], fmt(L));
+      }
     }
   }
 }
