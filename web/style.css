@@ -296,3 +296,8 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .rel-box button:hover { background: #f1ebfa; }
 .rel-box button b { display: inline-flex; justify-content: center; width: 18px; color: #7a3fd1; }
 .rel-box .tip { font-size: 11px; color: var(--ink2); padding: 4px 6px 2px; border-top: 1px solid var(--line); margin-top: 3px; }
+.skm-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.skm { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--line); background: #fff; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; color: var(--ink); text-align: left; }
+.skm span { display: inline-flex; width: 22px; height: 22px; }
+.skm span svg { width: 22px; height: 22px; }
+.skm.on { border-color: var(--accent, #c4552b); background: #fbeee8; color: #8a3517; font-weight: 600; }

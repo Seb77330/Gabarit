@@ -14,6 +14,8 @@ function ellipseOf(a, b) {
   if (!rx) rx = num(L / 2) || 1; if (!ry) ry = num(rx / 2) || 1;
   return { type: "ellipse", cx: a[0], cy: a[1], rx, ry, a: 0 };
 }
+// Outils qui posent des points un à un (ligne, contour, courbe, chemin).
+const drafting = (t) => hasPts(t) || t === "line";
 // Outils à plusieurs clics (sans glisser) : nombre de clics.
 export const MULTI = { circle3: 3, rect3: 3 };
 // Cercle passant par trois points (null si alignés).
@@ -54,7 +56,7 @@ export class Sketcher {
     svg.addEventListener("pointerup", (e) => this.up(e));
     svg.addEventListener("dblclick", (e) => {
       e.preventDefault();
-      if (hasPts(this.draft?.type)) { this.finishPoly(); return; }
+      if (drafting(this.draft?.type)) { this.finishPoly(); return; }
       const g = this.dimAt(e); if (g && (this.sel || g.getAttribute("data-cid"))) this.editDim(g);
     });
     svg.addEventListener("wheel", (e) => {
@@ -219,7 +221,7 @@ export class Sketcher {
       if (this.draft.clicks.length >= MULTI[t]) this.makeFromDraft(); else this.render();
       return;
     }
-    if (hasPts(t)) {
+    if (drafting(t)) {
       if (!this.draft) this.draft = { type: t, pts: [p], cur: p };
       else {
         const f = this.draft.pts[0];
@@ -272,7 +274,7 @@ export class Sketcher {
       return;
     }
     if (this.draft) {
-      if (hasPts(this.draft.type)) this.draft.cur = sn.p; else if (this.draft.dragging || this.draft.click) this.draft.b = sn.p;
+      if (drafting(this.draft.type)) this.draft.cur = sn.p; else if (this.draft.dragging || this.draft.click) this.draft.b = sn.p;
     }
     this.render();
   }
@@ -281,14 +283,14 @@ export class Sketcher {
     const still = this.downAt && Math.hypot(e.clientX - this.downAt[0], e.clientY - this.downAt[1]) < 5;
     if (e.button === 2 && d?.kind === "pan" && Math.hypot(e.clientX - d.start[0], e.clientY - d.start[1]) < 5) {
       // clic droit sans glisser : fin de l'outil (comme Échap), sinon les contraintes possibles
-      if (this.draft && hasPts(this.draft.type)) { this.finishPoly(); return; }
+      if (this.draft && drafting(this.draft.type)) { this.finishPoly(); return; }
       if (this.draft || this.tool !== "select") { this.draft = null; this.setTool("select"); return; }
       this.api.onPick?.(e, true); return;
     }
     if (d && (d.kind === "move" || d.kind === "vertex" || d.kind === "bend")) this.api.update(() => {}, false);
     if (this.tool === "select" && e.button === 0) { this.api.onPick?.(e, !d || !d.moved ? still : false); this.downAt = null; }
     if (d && (d.kind === "move" || d.kind === "vertex" || d.kind === "bend")) return;
-    if (!this.draft || hasPts(this.draft.type) || !this.draft.dragging) return;
+    if (!this.draft || drafting(this.draft.type) || !this.draft.dragging) return;
     const { a, b } = this.draft;
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
     if (L * this.zoom < 4) { // simple clic : on attend un deuxième clic
@@ -307,12 +309,15 @@ export class Sketcher {
   finishPoly() {
     const pts = this.draft.pts, type = this.draft.type, closed = !!this.draft.closed; this.draft = null;
     if (type === "spline") { if (pts.length < (closed ? 3 : 2)) { this.render(); return; } this.commitNew({ type, pts, closed }); return; }
-    if (pts.length < (type === "path" ? 2 : 3)) { this.render(); return; }
-    const ent = type === "path" ? { type, pts } : { type: "poly", pts, r: 0 };
+    if (type !== "line" && pts.length < (type === "path" ? 2 : 3)) { this.render(); return; }
+    const open = type === "path" || (type === "line" && !closed);
+    if (type === "line" && pts.length < 2) { this.render(); return; }
+    if (type === "line" && closed && pts.length < 3) { this.render(); return; }
+    const ent = open ? { type: "path", pts } : { type: "poly", pts, r: 0 };
     // contraintes automatiques : côtés tracés horizontaux ou verticaux
     const auto = [];
     const n = pts.length;
-    for (let i = 0; i < (type === "path" ? n - 1 : n); i++) {
+    for (let i = 0; i < (open ? n - 1 : n); i++) {
       const a = pts[i], b = pts[(i + 1) % n];
       if (Math.abs(a[1] - b[1]) < 1e-9 && Math.abs(a[0] - b[0]) > 1e-9) auto.push({ type: "horizontal", k: i });
       else if (Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) > 1e-9) auto.push({ type: "vertical", k: i });
@@ -359,7 +364,12 @@ export class Sketcher {
     inp.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") finish(true); if (ev.key === "Escape") finish(false); });
     inp.addEventListener("blur", () => finish(true));
   }
-  cancel() { if (this.draft || this.tool !== "select") { this.draft = null; this.setTool("select"); return true; } return false; }
+  cancel() {
+    // Échap pendant une ligne ou un contour : on garde ce qui est déjà tracé
+    if (this.draft && drafting(this.draft.type) && this.draft.pts.length >= 2 && this.draft.type !== "spline") this.finishPoly();
+    if (this.draft || this.tool !== "select") { this.draft = null; this.setTool("select"); return true; }
+    return false;
+  }
   deleteSel() {
     if (!this.sel) return; const id = this.sel; this.sel = null;
     this.subs = [];
@@ -416,7 +426,7 @@ export class Sketcher {
     const dr = this.draft;
     if (dr) {
       const c = this.cursor?.p;
-      if (hasPts(dr.type)) {
+      if (drafting(dr.type)) {
         const raw = [...dr.pts, dr.cur || c].filter(Boolean);
         const pts = (dr.type === "spline" && raw.length > 2 ? outline({ type: "spline", pts: raw, closed: false }) : raw).map((p) => this.toS(p));
         el("path", { d: "M" + pts.map((p) => p.join(" ")).join("L"), class: "draft" }, svg);

@@ -194,7 +194,8 @@ function onWorker(m) {
     if (m.req !== buildReq) return;
     // pendant une sélection, la pièce affichée s'arrête avant l'étape : on calcule en plus l'aperçu du résultat
     const pf = st.pick?.featId ? feat(st.pick.featId) : null;
-    if (pf && ["fillet", "chamfer", "shell", "draft"].includes(pf.type) && !pf.suppressed && (pf.edges || pf.faces || []).length) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
+    if (m.regions && st.pick?.kind === "regions" && pf) { st.regions = m.regions; viewer.setRegions(m.regions, regionSel(pf)); }
+    if (pf && ((["fillet", "chamfer", "shell", "draft"].includes(pf.type) && (pf.edges || pf.faces || []).length) || (pf.type === "extrude" && pf.regions?.length)) && !pf.suppressed) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
     else viewer.setGhost(null);
     st.building = false; showBusy(false);
     if (m.heap > 1.4e9) setTimeout(restartWorker, 50); // libère la mémoire du noyau
@@ -227,7 +228,8 @@ function requestBuild(delay = 150) {
     if (isAsm()) return;
     buildReq++; st.building = true;
     setTimeout(() => { if (st.building) showBusy(true); }, 250);
-    worker.postMessage({ type: "build", req: buildReq, doc, stopAt: currentStopAt() });
+    const rf = st.pick?.kind === "regions" ? feat(st.pick.featId) : null;
+    worker.postMessage({ type: "build", req: buildReq, doc, stopAt: currentStopAt(), regionsOf: rf?.sketch });
   }, delay);
 }
 let exportReq = 1e6;
@@ -355,6 +357,8 @@ function toolAction(k) {
       if (type === "extrude") Object.assign(f, { dist: k === "cut" ? "5" : "10", dir: k === "cut" ? "inverse" : "normal", through: false });
       else Object.assign(f, { axis: "y", angle: "360" });
       insertFeature(f);
+      // contours qui se croisent : on demande quelles zones utiliser
+      if (type === "extrude" && crossingContours(feat(skId))) startPick("regions", f.id);
     };
     if (sk) make(sk.id);
     else { toast("Dessine le profil, puis Entrée (ou le bouton vert)."); choosePlane((plane) => createSketch(plane, make, { extrude: "Extruder", cut: "Enlever la matière", revolve: "Faire tourner" }[k])); }
@@ -436,6 +440,37 @@ function pickFacePlane(cb) {
   } });
 }
 
+// Vrai si deux contours fermés de l'esquisse se croisent (il faut alors choisir les zones).
+function crossingContours(sk) {
+  if (!sk) return false;
+  const v = varsMap(doc.params); const L = [];
+  for (const e of sk.entities || []) { try { const o = evalEntity(e, v); if (o.type === "point" || o.type === "text" || o.construction || o.type === "path" || (o.type === "spline" && !o.closed)) continue; L.push(outline(o)); } catch { /* ignorée */ } }
+  const segX = (a, b, c, d) => { const r = (p, q, s2) => (q[0] - p[0]) * (s2[1] - p[1]) - (q[1] - p[1]) * (s2[0] - p[0]); const d1 = r(c, d, a), d2 = r(c, d, b), d3 = r(a, b, c), d4 = r(a, b, d); return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0)) && d1 && d2 && d3 && d4; };
+  for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
+    const A = L[i], B = L[j];
+    for (let a = 0; a < A.length; a++) for (let b = 0; b < B.length; b++) if (segX(A[a], A[(a + 1) % A.length], B[b], B[(b + 1) % B.length])) return true;
+  }
+  return false;
+}
+// Zones choisies : index des zones (maillage) qui contiennent un point enregistré.
+function regionSel(f) {
+  const sk = feat(f.sketch); if (!sk || !st.regions || !f.regions?.length) return [];
+  let pl; try { pl = resolvePlane(sk.plane, varsMap(doc.params)); } catch { return []; }
+  const uv = (x, y, z) => { const d = [x - pl.origin[0], y - pl.origin[1], z - pl.origin[2]]; return [dot(d, pl.x), dot(d, pl.y)]; };
+  const out = [];
+  st.regions.forEach((T, i) => {
+    for (let t = 0; t < T.length; t += 9) {
+      const a = uv(T[t], T[t + 1], T[t + 2]), b = uv(T[t + 3], T[t + 4], T[t + 5]), c = uv(T[t + 6], T[t + 7], T[t + 8]);
+      if (f.regions.some((p) => inTri([+p[0], +p[1]], a, b, c))) { out.push(i); break; }
+    }
+  });
+  return out;
+}
+function inTri(p, a, b, c) {
+  const s1 = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]), s2 = (c[0] - b[0]) * (p[1] - b[1]) - (c[1] - b[1]) * (p[0] - b[0]), s3 = (a[0] - c[0]) * (p[1] - c[1]) - (a[1] - c[1]) * (p[0] - c[0]);
+  return (s1 >= -1e-9 && s2 >= -1e-9 && s3 >= -1e-9) || (s1 <= 1e-9 && s2 <= 1e-9 && s3 <= 1e-9);
+}
+
 // ---------- Sélection en 3D (arêtes, faces, positions de perçage) ----------
 function startPick(kind, featId) {
   st.pick = { kind, featId };
@@ -446,9 +481,10 @@ function startPick(kind, featId) {
     points: "Clique sur la face pour placer les trous. Tu peux corriger les cotes à droite.",
     cyl: "Clique sur la face cylindrique à fileter : un axe (vis) ou l’intérieur d’un trou (taraudage).",
     upto: "Clique sur la face plane où l’extrusion doit s’arrêter.",
+    regions: "Les contours se croisent : clique les zones à extruder (reclique pour en retirer une), puis Entrée.",
   };
   banner(texts[kind]);
-  viewer.setPick({ kind: kind === "edges" ? "edge" : "face", onPick: (hit) => onPick(hit) });
+  viewer.setPick({ kind: kind === "edges" ? "edge" : kind === "regions" ? "region" : "face", onPick: (hit) => onPick(hit) });
   requestBuild(0); renderProps(); refreshMarkers();
 }
 // Valider l'étape en cours (bouton, bandeau ou touche Entrée).
@@ -465,12 +501,25 @@ function validateFeature() {
 }
 function stopPick(rebuild) {
   if (!st.pick) return;
-  st.pick = null; viewer.setPick(null); viewer.setGhost(null); banner(null); refreshMarkers();
+  st.pick = null; st.regions = null; viewer.setRegions(null); viewer.setPick(null); viewer.setGhost(null); banner(null); refreshMarkers();
   if (rebuild !== false) { requestBuild(0); renderProps(); }
 }
 function onPick(hit) {
   const f = feat(st.pick.featId); if (!f) return;
   const tol = viewer.size / 120;
+  if (st.pick.kind === "regions") {
+    const sk = feat(f.sketch); const pl = resolvePlane(sk.plane, varsMap(doc.params));
+    const d = hit.point.map((c, i) => c - pl.origin[i]); const p = [round(dot(d, pl.x), 0.001), round(dot(d, pl.y), 0.001)];
+    const sel = regionSel(f);
+    mutate(() => {
+      if (sel.includes(hit.region)) { // déjà choisie : on la retire
+        const T = st.regions[hit.region]; const uv = (k) => { const q = [T[k] - pl.origin[0], T[k + 1] - pl.origin[1], T[k + 2] - pl.origin[2]]; return [dot(q, pl.x), dot(q, pl.y)]; };
+        f.regions = f.regions.filter((q) => { for (let t = 0; t < T.length; t += 9) if (inTri([+q[0], +q[1]], uv(t), uv(t + 3), uv(t + 6))) return false; return true; });
+        if (!f.regions.length) delete f.regions;
+      } else (f.regions = f.regions || []).push(p);
+    });
+    viewer.setRegions(st.regions, regionSel(f)); renderProps(); return;
+  }
   if (st.pick.kind === "cyl" || st.pick.kind === "upto") {
     if (st.pick.kind === "cyl" && !hit.info?.cyl) { toast("Choisis une face cylindrique (un axe ou un trou)."); return; }
     if (st.pick.kind === "upto" && !hit.info?.plane) { toast("Choisis une face plane."); return; }
@@ -742,6 +791,11 @@ function renderProps() {
   if (f.type === "extrude") {
     add(selectField("Esquisse utilisée", f.sketch, [["", "—"], ...sketchOptions(f)], (v) => mutate(() => { f.sketch = v; })));
     add(segField("Effet", f, "mode", [["add", "Ajouter de la matière"], ["cut", "Enlever de la matière"]]));
+    const nz = (f.regions || []).length, picking = st.pick?.featId === f.id && st.pick.kind === "regions";
+    add(h("div", { class: "field" }, h("label", {}, "Zones à extruder"), h("div", { class: "note" + (picking && !nz ? " err" : "") }, nz ? `${nz} zone(s) choisie(s).` : picking ? "Clique les zones dans la vue." : "Tous les contours.")));
+    add(h("div", { class: "btnrow" },
+      picking ? h("button", { class: "btn primary", title: "Entrée", onclick: () => stopPick(true) }, "C’est bon") : h("button", { class: "btn", onclick: () => startPick("regions", f.id) }, "Choisir les zones"),
+      nz ? h("button", { class: "btn", onclick: () => { mutate(() => { delete f.regions; }); if (st.regions) viewer.setRegions(st.regions, []); renderProps(); } }, "Tous les contours") : null));
     add(segField("Jusqu’à", f, "end", [["dist", "Une distance"], ["face", "Une face"]]));
     if (f.end === "face") {
       add(h("div", { class: "note" + (f.upTo ? "" : " err") }, f.upTo ? "Face d’arrivée choisie. Le sens est déduit de la face." : "Clique sur « Choisir la face d’arrivée »."));
@@ -966,7 +1020,7 @@ function constraintPanel(f) {
 }
 
 // ---------- Mode esquisse ----------
-const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"], ["convert", "Reprendre"]];
+const SK_TOOLS = [["select", "Choisir"], ["line", "Ligne"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"], ["convert", "Reprendre"]];
 // Façons de tracer un rectangle ou un cercle (le bouton reprend la dernière choisie).
 const SK_FAM = {
   rect: [["rect", "Coin à coin"], ["rectc", "Depuis le centre"], ["rect3", "3 points (incliné)"]],
@@ -976,6 +1030,7 @@ const famOf = (t) => Object.keys(SK_FAM).find((k) => SK_FAM[k].some(([x]) => x =
 const skMode = { rect: "rect", circle: "circle" };
 const SK_ALL = SK_TOOLS.flatMap(([k, l]) => SK_FAM[k] ? SK_FAM[k].map(([v, vl]) => [v, `${l} : ${vl.toLowerCase()}`]) : [[k, l]]);
 const SK_HINTS = {
+  line: "Clique le début puis chaque point : les traits s’enchaînent. Reclique sur le premier point pour fermer le contour. Double-clic, Entrée ou Échap : finir la ligne.",
   rectc: "Clique au centre, puis à un coin.",
   rect3: "Clique les deux bouts d’un côté, puis un troisième point pour la largeur.",
   circle3: "Clique trois points par lesquels le cercle doit passer.",
@@ -1102,6 +1157,11 @@ function renderSketchProps(P) {
     h("button", { class: "ko", title: "Annuler l’esquisse (oublier les changements)", "aria-label": "Annuler", onclick: () => cancelSketch() }, "✕"),
     h("span", { class: "lbl" }, st.afterLabel ? `✓ = ${st.afterLabel}` : "Esquisse")));
   P.append(h("div", { class: "head" }, h("span", { class: "ic", html: ICONS.sketch }), h("input", { value: f.name, onchange: (e) => mutate(() => { f.name = e.target.value.trim() || f.name; }) })));
+  const fam = famOf(sketcher.tool);
+  if (fam) {
+    P.append(h("h2", {}, fam === "rect" ? "Type de rectangle" : "Type de cercle"),
+      h("div", { class: "skm-list" }, ...SK_FAM[fam].map(([v, l]) => h("button", { class: "skm" + (sketcher.tool === v ? " on" : ""), "data-m": v, onclick: () => sketcher.setTool(v) }, h("span", { html: ICONS[v] }), l))));
+  }
   P.append(...planeFields(f));
   const ents = f.entities || [];
   const e = ents.find((x) => x.id === st.skSel);
@@ -1669,7 +1729,7 @@ sketcher = new Sketcher($("#skSvg"), {
     if (f.constraints?.length && !solveAndWrite(f, [{ ref, at }])) ent.pts[ref.k] = old;
   }, true),
   select: (id) => { st.skSel = id; renderProps(); },
-  onTool: () => { $("#relBox")?.remove(); renderSketchTools(); },
+  onTool: () => { $("#relBox")?.remove(); renderSketchTools(); if (st.editSketch) renderProps(); },
   onPick: (e, still) => relBox(e, still),
   onView: () => syncSketchView(),
 });
@@ -1724,7 +1784,7 @@ document.addEventListener("keydown", (e) => {
     if (st.sel && feat(st.sel) && !isAsm()) { cancelFeature(); return; }
     select(null); return;
   }
-  if (e.key === "Enter" && st.editSketch && ["poly", "path", "spline"].includes(sketcher.draft?.type)) { sketcher.finishPoly(); return; }
+  if (e.key === "Enter" && st.editSketch && ["poly", "path", "spline", "line"].includes(sketcher.draft?.type)) { sketcher.finishPoly(); return; }
   if (e.key === "Enter" && st.editSketch && !sketcher.draft) { closeSketch(); return; }
   if (e.key === "Enter" && !isAsm() && (st.pick || (st.sel && feat(st.sel) && feat(st.sel).type !== "sketch"))) { e.preventDefault(); validateFeature(); return; }
   if (e.key === "Enter" && !isAsm() && !st.editSketch && !st.sel && lastTool) { e.preventDefault(); toolAction(lastTool); return; }

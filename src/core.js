@@ -6,7 +6,7 @@ import { objText, threeMF } from "./meshfiles.js";
 import FONT from "./texte.ttf";
 let fontReady = null;
 const ensureFont = () => (fontReady ||= R.loadFont(FONT.buffer.slice(FONT.byteOffset, FONT.byteOffset + FONT.byteLength), "gabarit"));
-import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, toWorld, cross, dot, norm, bezierSegs, outline } from "./geo.js";
+import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, inPoly, isOpen, toWorld, cross, dot, norm, bezierSegs, outline } from "./geo.js";
 
 let lastShape = null;
 
@@ -177,7 +177,39 @@ function threadCut(f, vars, shape) {
   return shape;
 }
 
-function sketchDrawing(ents) {
+// Contours fermés de l'esquisse (sans traits de construction).
+function closedItems(ents) {
+  return ents.filter((o) => o.type !== "point" && !isOpen(o) && !o.construction).map((o) => ({ o, pts: outline(o) }));
+}
+// Zone qui contient le point p : intersection des contours qui le contiennent, moins les autres.
+function regionAt(items, p) {
+  let acc = null;
+  for (const it of items) if (inPoly(p, it.pts)) { const d = entityDrawing(it.o); acc = acc ? acc.intersect(d) : d; if (!acc.innerShape) return null; }
+  if (!acc) return null;
+  for (const it of items) if (!inPoly(p, it.pts)) { acc = acc.cut(entityDrawing(it.o)); if (!acc.innerShape) return null; }
+  return acc;
+}
+// Toutes les zones délimitées par les contours (pour les cliquer en 3D).
+function allRegions(ents) {
+  const items = closedItems(ents); let regs = []; let union = null;
+  for (const it of items) {
+    const D = entityDrawing(it.o); const next = [];
+    for (const r of regs) {
+      const a = r.intersect(D); if (a.innerShape) next.push(a);
+      const b = r.cut(D); if (b.innerShape) next.push(b);
+    }
+    const rest = union ? D.cut(union) : D; if (rest.innerShape) next.push(rest);
+    union = union ? union.fuse(D) : D; regs = next;
+  }
+  return regs;
+}
+function sketchDrawing(ents, regions) {
+  if (regions?.length) {
+    const items = closedItems(ents); let acc = null;
+    for (const p of regions) { const r = regionAt(items, p.map(Number)); if (r) acc = acc ? acc.fuse(r) : r; }
+    if (!acc) throw new Error("Aucune zone choisie : clique à l’intérieur d’un contour");
+    return acc;
+  }
   const items = nestProfiles(ents);
   if (!items.length) throw new Error("L’esquisse ne contient aucun contour fermé");
   let acc = null;
@@ -337,7 +369,7 @@ export async function build(doc, opts = {}) {
       if (f.type === "plane") { if (!refs[f.id]) { P(f.base); throw new Error("Plan impossible à calculer"); } continue; }
       if (f.type === "extrude" || f.type === "revolve") {
         const sk = getSketch(f.sketch);
-        const drawing = sketchDrawing(sk.ents);
+        const drawing = sketchDrawing(sk.ents, f.regions);
         let solid;
         if (f.type === "extrude" && f.end === "face") {
           solid = extrudeToFace(drawing, sk.pl, f, shape);
@@ -474,7 +506,22 @@ export async function build(doc, opts = {}) {
     }
   }
   lastShape = shape;
-  return { shape, errors, sketches, info };
+  let regions;
+  if (opts.regionsOf && sketches[opts.regionsOf]) {
+    const sk = sketches[opts.regionsOf]; regions = [];
+    try {
+      for (const d of allRegions(sk.ents)) {
+        const so = d.sketchOnPlane(rPlane(sk.pl)); const list = so.sketches || [so];
+        const tris = [];
+        for (const one of list) {
+          const m = one.face().mesh({ tolerance: 0.05, angularTolerance: 0.2 });
+          for (const t of m.triangles) tris.push(m.vertices[t * 3], m.vertices[t * 3 + 1], m.vertices[t * 3 + 2]);
+        }
+        regions.push(new Float32Array(tris));
+      }
+    } catch (e) { if (globalThis.GABARIT_DEBUG) console.error(e); }
+  }
+  return { shape, errors, sketches, info, regions };
 }
 
 function humanError(e) {
