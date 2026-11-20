@@ -6,7 +6,7 @@ const { chromium } = require("playwright");
   await p.goto("http://localhost:8765/");
   const wait = async () => { await p.waitForTimeout(400); await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 60000 }); await p.waitForTimeout(300); };
   const G = (fn) => p.evaluate(fn);
-  await p.click("text=Commencer une pièce"); await p.click("text=Plan de dessus");
+  await p.click("text=Nouvelle pièce"); await p.click("text=Plan de dessus");
   const box = await p.locator("#skSvg").boundingBox(); const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
   // contour libre : rectangle à 4 points puis courber un côté
   await p.click("#skTools >> text=Contour libre");

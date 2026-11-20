@@ -1,0 +1,16 @@
+const { chromium } = require("playwright");
+(async () => {
+  const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
+  const p = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+  const logs = []; p.on("pageerror", (e) => logs.push("pageerror: " + e.message)); p.on("dialog", (d) => d.accept());
+  await p.goto("http://localhost:8765/"); await p.click("text=Voir l’exemple");
+  await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 60000 }); await p.waitForTimeout(1500);
+  await p.reload(); await p.waitForTimeout(1500);
+  console.log("welcome", await p.locator("#welcome .card button").allInnerTexts());
+  await p.screenshot({ path: "/tmp/claude-0/shots/96-accueil.png" });
+  await p.click("#welcome .rec-del"); await p.waitForTimeout(400);
+  console.log("after delete", await p.locator("#welcome .card button").allInnerTexts(), await p.evaluate(() => [window.gabarit.doc.features.length, Object.keys(window.gabarit.library())]));
+  console.log("version", await p.locator(".status .ver").innerText());
+  console.log("errors", logs.length ? logs : "none");
+  await b.close();
+})();

@@ -8,7 +8,7 @@ const { chromium } = require("playwright");
   p.on("pageerror", (e) => logs.push("pageerror: " + e.message + "\n" + e.stack));
   await p.goto(process.argv[2] || "http://localhost:8765/");
   await p.waitForFunction(() => window.gabarit, null);
-  await p.click("text=Commencer une pièce");
+  await p.click("text=Nouvelle pièce");
   await p.click("text=Plan de dessus");
   await p.waitForTimeout(300);
   const box = await p.locator("#skSvg").boundingBox();

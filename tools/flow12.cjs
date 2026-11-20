@@ -8,7 +8,7 @@ const { chromium } = require("playwright");
   await p.goto("http://localhost:8765/");
   await p.waitForFunction(() => window.gabarit && document.querySelector("#welcome"), null, { timeout: 60000 });
   // nouvelle pièce vide
-  await p.click("text=Commencer une pièce"); await p.waitForTimeout(500);
+  await p.click("text=Nouvelle pièce"); await p.waitForTimeout(500);
   console.log("start", await G(() => [window.gabarit.doc.kind || "part", window.gabarit.doc.features.length]));
   // 1) Esquisse → rectangle → clic direct sur Extrusion (sans Terminer)
   await p.click("#dlg >> text=Plan de dessus");
