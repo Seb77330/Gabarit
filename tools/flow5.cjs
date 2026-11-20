@@ -37,7 +37,7 @@ const { chromium } = require("playwright");
   const s3 = await p.evaluate(([u, v]) => window.gabarit.sketcher.toS([u, v]), e.pts[3]);
   await p.mouse.move(box.x + s3[0], box.y + s3[1]); await p.mouse.down(); await p.mouse.move(box.x + s3[0] - 30, box.y + s3[1] - 20, { steps: 5 }); await p.mouse.up();
   console.log("after drag", JSON.stringify((await sk()).entities[0].pts), JSON.stringify(await G(() => window.gabarit.sketcher.solveState)));
-  await p.click("#skTools >> text=Terminer"); await p.click(".tbtn[data-tool=extrude]");
+  await p.click("#skTools button[title=Entrée]"); await p.click(".tbtn[data-tool=extrude]");
   await p.waitForFunction(() => window.gabarit.st.mesh, null, { timeout: 30000 }); await p.waitForTimeout(500);
   console.log("bb", JSON.stringify(await G(() => [window.gabarit.st.errors, window.gabarit.st.info, window.gabarit.st.mesh.bb])));
   console.log(logs.join("\n") || "no errors"); await b.close();

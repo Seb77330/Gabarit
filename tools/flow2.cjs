@@ -24,7 +24,7 @@ const { chromium } = require("playwright");
   console.log("sketch plane", JSON.stringify(await p.evaluate(() => window.gabarit.doc.features.at(-1).plane)));
   // ajoute un cercle via doc (rapide) puis termine et extrude
   await p.evaluate(() => { const g = window.gabarit; g.doc.features.at(-1).entities.push({ id: "zz", type: "circle", cx: "70", cy: "0", d: "12" }); });
-  await p.click("#skTools >> text=Terminer");
+  await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=extrude]");
   await wait();
   console.log("boss", JSON.stringify(await p.evaluate(() => [window.gabarit.st.errors, window.gabarit.st.mesh.bb])));

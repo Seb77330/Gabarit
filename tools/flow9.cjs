@@ -17,7 +17,7 @@ const { chromium } = require("playwright");
   await p.screenshot({ path: "/tmp/claude-0/shots/56-text.png" });
   await p.click("#tree >> text=Marquage"); await p.click("#props >> text=Modifier l’esquisse"); await p.waitForTimeout(400);
   await p.screenshot({ path: "/tmp/claude-0/shots/57-text-sketch.png" });
-  await p.click("#skTools >> text=Terminer");
+  await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=drawing]"); await p.waitForSelector(".sheet svg", { timeout: 60000 }); await p.waitForTimeout(500);
   await p.screenshot({ path: "/tmp/claude-0/shots/58-drawing-dims.png" });
   console.log("LOGS", logs.join("\n"));

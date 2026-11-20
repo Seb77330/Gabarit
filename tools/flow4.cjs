@@ -19,7 +19,7 @@ const { chromium } = require("playwright");
   await p.mouse.move(mb.x + mb.width / 2, mb.y + mb.height / 2); await p.mouse.down(); await p.mouse.move(mb.x + 4, mb.y - 40, { steps: 6 }); await p.mouse.up();
   console.log("pts", JSON.stringify(await G(() => window.gabarit.doc.features[0].entities[0].pts)));
   await p.screenshot({ path: "/tmp/claude-0/shots/20-arc.png" });
-  await p.click("#skTools >> text=Terminer");
+  await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=extrude]"); await p.waitForFunction(() => window.gabarit.st.mesh, null, { timeout: 30000 }); await wait();
   console.log("extrude", JSON.stringify(await G(() => [window.gabarit.st.errors, window.gabarit.st.mesh.bb])));
   // plan de référence décalé de 30 depuis le dessus
@@ -29,7 +29,7 @@ const { chromium } = require("playwright");
   await p.selectOption("#props select >> nth=0", { label: "Plan 1" });
   await p.click("#skTools >> text=Cercle");
   await p.mouse.click(cx, cy); await p.mouse.click(cx + 40, cy);
-  await p.click("#skTools >> text=Terminer"); await wait();
+  await p.click("#skTools button[title=Entrée]"); await wait();
   // lissage entre esquisse 1 et 2 ? esquisse 1 déjà extrudée : on prend Esquisse 2 + une 3e au-dessus
   await p.evaluate(() => { const g = window.gabarit; const d = JSON.parse(JSON.stringify(g.doc));
     d.features.push({ id: "s3", type: "sketch", name: "Esquisse haut", plane: { kind: "ref", ref: d.features.find(f => f.type === "plane").id, offset: "25" }, entities: [{ id: "q", type: "rect", cx: "0", cy: "0", w: "6", h: "6", r: "0", a: "0" }] });
@@ -41,7 +41,7 @@ const { chromium } = require("playwright");
   await p.click(".tbtn[data-tool=draft]"); await p.waitForTimeout(1200);
   const q = await G(() => { const v = window.gabarit.viewer; const V = v.camera.position.constructor; const [a, b] = v.data.bb; const P = new V(b[0], 0, 4); P.project(v.camera); const r = v.renderer.domElement.getBoundingClientRect(); return [r.left + (P.x + 1) / 2 * r.width, r.top + (1 - P.y) / 2 * r.height]; });
   await p.mouse.move(q[0] - 3, q[1]); await p.mouse.click(q[0] - 3, q[1]); await p.waitForTimeout(300);
-  await p.click("#banner >> text=Terminé"); await wait();
+  await p.click("#banner >> text=Valider"); await wait();
   console.log("draft", JSON.stringify(await G(() => [window.gabarit.doc.features.at(-1).faces, window.gabarit.st.errors])));
   // import du STEP exporté plus tôt
   const [fc] = await Promise.all([p.waitForEvent("filechooser"), p.click(".tbtn[data-tool=import]")]);
