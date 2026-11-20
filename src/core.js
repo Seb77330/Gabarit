@@ -283,6 +283,30 @@ function patternTransforms(f, vars) {
 
 function decodeB64(b64) { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
 
+// STL → solide : on recoud les triangles (l'import de replicad échoue avec ce noyau),
+// on ferme chaque coque en solide puis on fusionne les faces coplanaires.
+let stlN = 0;
+async function stlSolid(blob) {
+  const oc = R.getOC(); const name = `/imp${stlN++}.stl`;
+  oc.FS.writeFile(name, new Uint8Array(await blob.arrayBuffer()));
+  const reader = new oc.StlAPI_Reader(); const raw = new oc.TopoDS_Shape();
+  const ok = reader.Read(raw, name); try { oc.FS.unlink(name); } catch { /* déjà supprimé */ }
+  reader.delete();
+  if (!ok) throw new Error("Fichier STL illisible");
+  const sew = new oc.BRepBuilderAPI_Sewing(1e-4, true, true, true, false); sew.Add(raw);
+  const pr = new oc.Message_ProgressRange(); sew.Perform(pr); pr.delete();
+  const sewed = sew.SewedShape(); sew.delete(); raw.delete();
+  const solids = [];
+  const ex = new oc.TopExp_Explorer(sewed, oc.TopAbs_ShapeEnum.TopAbs_SHELL, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+  for (; ex.More(); ex.Next()) {
+    const fx = new oc.ShapeFix_Solid(); const so = fx.SolidFromShell(oc.TopoDS.Shell(ex.Current())); fx.delete();
+    const u = new oc.ShapeUpgrade_UnifySameDomain(so, true, true, false); u.Build(); solids.push(R.cast(u.Shape())); u.delete();
+  }
+  ex.delete();
+  if (!solids.length) throw new Error("Aucune forme fermée dans ce fichier");
+  let s = solids[0]; for (let i = 1; i < solids.length; i++) { try { s = s.fuse(solids[i]); } catch { /* pièce à part */ } }
+  return s;
+}
 export async function build(doc, opts = {}) {
   if (doc.features.some((f) => f.type === "sketch" && (f.entities || []).some((e) => e.type === "text"))) await ensureFont();
   const vars = varsMap(doc.params);
@@ -433,7 +457,7 @@ export async function build(doc, opts = {}) {
         let imp = importCache.get(f.id);
         if (!imp || imp.key !== key) {
           const blob = new Blob([decodeB64(f.data)]);
-          const s = f.format === "stl" ? await R.importSTL(blob) : await R.importSTEP(blob);
+          const s = f.format === "stl" ? await stlSolid(blob) : await R.importSTEP(blob);
           if (!s) throw new Error("Fichier illisible");
           imp = { key, shape: s }; importCache.set(f.id, imp);
         }
@@ -468,7 +492,25 @@ export function meshShape(shape) {
   // Infos de faces planes, pour esquisser ou percer sur une face.
   const faces = {};
   let i = 0;
-  for (const fc of shape.faces) {
+  // Beaucoup de faces (maillage importé) : on lit les plans directement dans le maillage,
+  // l'interrogation face par face du noyau serait beaucoup trop lente.
+  const many = m.faceGroups.length > 1500;
+  if (many) {
+    const V = m.vertices, T = m.triangles;
+    for (const g of m.faceGroups) {
+      let n0 = null, flat = true, cx = 0, cy = 0, cz = 0, k = 0;
+      for (let t = g.start; t < g.start + g.count; t += 3) {
+        const a = T[t] * 3, b = T[t + 1] * 3, c = T[t + 2] * 3;
+        const ux = V[b] - V[a], uy = V[b + 1] - V[a + 1], uz = V[b + 2] - V[a + 2], vx = V[c] - V[a], vy = V[c + 1] - V[a + 1], vz = V[c + 2] - V[a + 2];
+        let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx; const L = Math.hypot(nx, ny, nz); if (L < 1e-12) continue;
+        nx /= L; ny /= L; nz /= L;
+        if (!n0) n0 = [nx, ny, nz]; else if (nx * n0[0] + ny * n0[1] + nz * n0[2] < 0.99999) { flat = false; break; }
+        cx += V[a] + V[b] + V[c]; cy += V[a + 1] + V[b + 1] + V[c + 1]; cz += V[a + 2] + V[b + 2] + V[c + 2]; k += 3;
+      }
+      if (flat && n0 && k) faces[g.faceId] = { plane: true, c: [cx / k, cy / k, cz / k], n: n0 };
+    }
+  }
+  for (const fc of many ? [] : shape.faces) {
     i++;
     try {
       if (fc.geomType === "PLANE") {
@@ -579,7 +621,7 @@ async function componentShape(c) {
     if (!shape) throw new Error("La pièce est vide");
   } else {
     const blob = new Blob([decodeB64(c.src.data)]);
-    shape = c.src.kind === "stl" ? await R.importSTL(blob) : await R.importSTEP(blob);
+    shape = c.src.kind === "stl" ? await stlSolid(blob) : await R.importSTEP(blob);
   }
   asmCache.set(c.id, { key, shape });
   return shape;

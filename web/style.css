@@ -282,3 +282,17 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .welcome .rec-del:hover { border-color: var(--err); background: #fdecea; }
 .status .ver { border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 0 4px; }
 .status .ver:hover { color: var(--accent); text-decoration: underline; }
+/* v0.9.2 : façons de tracer, centres de la pièce, contraintes près du pointeur */
+.sketch .ref-ctr { stroke: #2a7bd1; stroke-width: 1.4; fill: none; pointer-events: none; }
+.sk-method { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 8px #0002; z-index: 5; }
+.sk-method button { display: flex; align-items: center; gap: 6px; border: 1px solid transparent; background: none; padding: 4px 10px 4px 6px; border-radius: 6px; font: inherit; font-size: 12px; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.sk-method button span { display: inline-flex; width: 20px; height: 20px; }
+.sk-method button span svg { width: 20px; height: 20px; }
+.sk-method button:hover { background: #f3f1ee; }
+.sk-method button.on { border-color: var(--accent, #c4552b); background: #fbeee8; color: #8a3517; }
+.rel-box { position: absolute; z-index: 6; min-width: 190px; max-width: 260px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px #0003; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.rel-box .t { font-size: 11px; font-weight: 600; color: var(--ink2); padding: 2px 6px 4px; text-transform: uppercase; letter-spacing: .04em; }
+.rel-box button { display: flex; align-items: center; gap: 8px; text-align: left; border: 0; background: none; padding: 5px 6px; border-radius: 5px; font: inherit; font-size: 13px; cursor: pointer; color: var(--ink); }
+.rel-box button:hover { background: #f1ebfa; }
+.rel-box button b { display: inline-flex; justify-content: center; width: 18px; color: #7a3fd1; }
+.rel-box .tip { font-size: 11px; color: var(--ink2); padding: 4px 6px 2px; border-top: 1px solid var(--line); margin-top: 3px; }

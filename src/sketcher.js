@@ -14,6 +14,34 @@ function ellipseOf(a, b) {
   if (!rx) rx = num(L / 2) || 1; if (!ry) ry = num(rx / 2) || 1;
   return { type: "ellipse", cx: a[0], cy: a[1], rx, ry, a: 0 };
 }
+// Outils à plusieurs clics (sans glisser) : nombre de clics.
+export const MULTI = { circle3: 3, rect3: 3 };
+// Cercle passant par trois points (null si alignés).
+export function circle3(p, q, r) {
+  const ax = p[0], ay = p[1], bx = q[0], by = q[1], cx = r[0], cy = r[1];
+  const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(d) < 1e-9) return null;
+  const a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
+  const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d, uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+  return [ux, uy, Math.hypot(ax - ux, ay - uy)];
+}
+// Entité construite à partir des clics du tracé (aperçu et création utilisent la même règle).
+export function entOf(type, a, b, c, step = 1, round = (v) => v) {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (type === "rect") return { type, cx: round((a[0] + b[0]) / 2), cy: round((a[1] + b[1]) / 2), w: round(Math.abs(b[0] - a[0])), h: round(Math.abs(b[1] - a[1])), r: 0, a: 0 };
+  if (type === "rectc") return { type: "rect", cx: a[0], cy: a[1], w: round(Math.abs(b[0] - a[0]) * 2), h: round(Math.abs(b[1] - a[1]) * 2), r: 0, a: 0 };
+  if (type === "rect3") {
+    if (!c || L < 1e-9) return null;
+    const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, hh = (c[0] - a[0]) * -uy + (c[1] - a[1]) * ux;
+    return { type: "rect", cx: round(a[0] + ux * L / 2 - uy * hh / 2), cy: round(a[1] + uy * L / 2 + ux * hh / 2), w: round(L), h: round(Math.abs(hh)), r: 0, a: round(Math.atan2(uy, ux) * 180 / Math.PI) };
+  }
+  if (type === "circle") return { type, cx: a[0], cy: a[1], d: round(L * 2) };
+  if (type === "circle3") { if (!c) return null; const k = circle3(a, b, c); return k ? { type: "circle", cx: round(k[0]), cy: round(k[1]), d: round(k[2] * 2) } : null; }
+  if (type === "polygon") return { type, cx: a[0], cy: a[1], d: round(L * 2), n: 6, a: round(Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI) };
+  if (type === "slot") return { type, x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: round(Math.max(step, Math.round(L / 3))) };
+  if (type === "ellipse") return ellipseOf(a, b);
+  return null;
+}
 let uid = 0; export const newId = (p = "e") => p + Date.now().toString(36) + (uid++).toString(36);
 
 export class Sketcher {
@@ -119,7 +147,7 @@ export class Sketcher {
     }
     return { p: [num(q[0]), num(q[1])] };
   }
-  setTool(t) { this.tool = t; this.draft = null; this.render(); this.api.onTool?.(t); }
+  setTool(t) { this.tool = t; this.draft = null; if (t !== "select") this.subs = []; this.render(); this.api.onTool?.(t); }
   hitEntity(e) {
     const p = this.toW(e); const tol = 6 / this.zoom; let best = null, bd = tol;
     for (const o of this.evaluated()) {
@@ -167,21 +195,30 @@ export class Sketcher {
     if (t === "select") {
       const mi = this.hitMid(e);
       const sub = this.pickSub(e);
-      if (e.shiftKey) { if (sub) { const i = this.subs.findIndex((x) => this.sameRef(x, sub)); if (i >= 0) this.subs.splice(i, 1); else this.subs.push(sub); } }
+      const add = e.shiftKey || e.ctrlKey || e.metaKey;
+      if (add) { if (sub) { const i = this.subs.findIndex((x) => this.sameRef(x, sub)); if (i >= 0) this.subs.splice(i, 1); else this.subs.push(sub); } }
       else this.subs = sub ? [sub] : [];
-      const id = sub && sub.e !== "origin" ? sub.e : (e.shiftKey ? this.sel : null);
+      let id = sub && sub.e !== "origin" ? sub.e : (add ? this.sel : null);
+      if (add && sub && !this.subs.some((x) => x.e === sub.e)) id = this.subs.find((x) => x.e !== "origin")?.e || null;
       this.sel = id; this.api.select(id);
-      if (sub && sub.e !== "origin" && !e.shiftKey) {
+      this.downAt = [e.clientX, e.clientY];
+      if (sub && sub.e !== "origin" && !add) {
         const ent = this.api.getSketch().entities.find((x) => x.id === sub.e);
         if (sub.kind === "pt" && typeof sub.k === "number" && hasPts(ent.type)) this.drag = { kind: "vertex", i: sub.k, id: sub.e };
         else this.drag = { kind: "move", id: sub.e, start: this.snap(e).p, orig: JSON.parse(JSON.stringify(ent)), moved: false };
       } else if (!sub) this.drag = { kind: "pan", start: [e.clientX, e.clientY], pan: [...this.pan] };
-      if (mi >= 0 && !e.shiftKey && sub?.kind === "seg") this.drag = { kind: "bend", i: mi, start: [e.clientX, e.clientY] };
+      if (mi >= 0 && !add && sub?.kind === "seg") this.drag = { kind: "bend", i: mi, start: [e.clientX, e.clientY] };
       this.render(); return;
     }
     if (t === "convert") { const ed = this.edgeAt(e); if (ed) this.convertEdge(ed); this.hoverEdge = null; this.render(); return; }
     const { p } = this.snap(e, this.draft?.pts?.at(-1) || this.draft?.a);
     if (this.draft?.click) { this.draft.b = p; this.makeFromDraft(); return; }
+    if (MULTI[t]) {
+      if (!this.draft) this.draft = { type: t, clicks: [] };
+      const last = this.draft.clicks.at(-1); if (!last || last[0] !== p[0] || last[1] !== p[1]) this.draft.clicks.push(p);
+      if (this.draft.clicks.length >= MULTI[t]) this.makeFromDraft(); else this.render();
+      return;
+    }
     if (hasPts(t)) {
       if (!this.draft) this.draft = { type: t, pts: [p], cur: p };
       else {
@@ -241,7 +278,16 @@ export class Sketcher {
   }
   up(e) {
     const d = this.drag; this.drag = null;
-    if (d && (d.kind === "move" || d.kind === "vertex" || d.kind === "bend")) { this.api.update(() => {}, false); return; }
+    const still = this.downAt && Math.hypot(e.clientX - this.downAt[0], e.clientY - this.downAt[1]) < 5;
+    if (e.button === 2 && d?.kind === "pan" && Math.hypot(e.clientX - d.start[0], e.clientY - d.start[1]) < 5) {
+      // clic droit sans glisser : fin de l'outil (comme Échap), sinon les contraintes possibles
+      if (this.draft && hasPts(this.draft.type)) { this.finishPoly(); return; }
+      if (this.draft || this.tool !== "select") { this.draft = null; this.setTool("select"); return; }
+      this.api.onPick?.(e, true); return;
+    }
+    if (d && (d.kind === "move" || d.kind === "vertex" || d.kind === "bend")) this.api.update(() => {}, false);
+    if (this.tool === "select" && e.button === 0) { this.api.onPick?.(e, !d || !d.moved ? still : false); this.downAt = null; }
+    if (d && (d.kind === "move" || d.kind === "vertex" || d.kind === "bend")) return;
     if (!this.draft || hasPts(this.draft.type) || !this.draft.dragging) return;
     const { a, b } = this.draft;
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -252,16 +298,10 @@ export class Sketcher {
     this.makeFromDraft();
   }
   makeFromDraft() {
-    const { type, a, b } = this.draft; this.draft = null;
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-    if (L < 1e-6) { this.render(); return; }
-    let ent;
-    if (type === "rect") ent = { type, cx: num((a[0] + b[0]) / 2), cy: num((a[1] + b[1]) / 2), w: num(Math.abs(b[0] - a[0])), h: num(Math.abs(b[1] - a[1])), r: 0, a: 0 };
-    if (type === "rect" && (!ent.w || !ent.h)) { this.render(); return; }
-    if (type === "circle") ent = { type, cx: a[0], cy: a[1], d: num(L * 2) };
-    if (type === "polygon") ent = { type, cx: a[0], cy: a[1], d: num(L * 2), n: 6, a: num(Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI) };
-    if (type === "slot") ent = { type, x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: num(Math.max(this.snapStep, Math.round(L / 3))) };
-    if (type === "ellipse") ent = ellipseOf(a, b);
+    const { type, a, b, clicks } = this.draft; this.draft = null;
+    const ent = clicks ? entOf(type, clicks[0], clicks[1], clicks[2], this.snapStep, num) : entOf(type, a, b, null, this.snapStep, num);
+    const L = clicks ? 1 : Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (!ent || L < 1e-6 || (ent.type === "rect" && (!ent.w || !ent.h)) || (ent.type === "circle" && !ent.d)) { this.render(); return; }
     this.commitNew(ent);
   }
   finishPoly() {
@@ -319,7 +359,7 @@ export class Sketcher {
     inp.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") finish(true); if (ev.key === "Escape") finish(false); });
     inp.addEventListener("blur", () => finish(true));
   }
-  cancel() { if (this.draft) { this.draft = null; this.render(); return true; } if (this.tool !== "select") { this.setTool("select"); return true; } return false; }
+  cancel() { if (this.draft || this.tool !== "select") { this.draft = null; this.setTool("select"); return true; } return false; }
   deleteSel() {
     if (!this.sel) return; const id = this.sel; this.sel = null;
     this.subs = [];
@@ -346,6 +386,10 @@ export class Sketcher {
     if (this.refs.lines.length) {
       let d = ""; for (const [a, b] of this.refs.lines) { const p = this.toS(a), q = this.toS(b); d += `M${p[0].toFixed(1)} ${p[1].toFixed(1)}L${q[0].toFixed(1)} ${q[1].toFixed(1)}`; }
       el("path", { d, class: "ref" }, svg);
+    }
+    if (this.refs.centers?.length) {
+      let d = ""; for (const c of this.refs.centers) { const p = this.toS(c); d += `M${(p[0] - 5).toFixed(1)} ${p[1].toFixed(1)}h10M${p[0].toFixed(1)} ${(p[1] - 5).toFixed(1)}v10`; }
+      el("path", { d, class: "ref-ctr" }, svg);
     }
     // entités
     const ev = this.evaluated();
@@ -379,12 +423,16 @@ export class Sketcher {
         const last = dr.pts.at(-1), cur = dr.cur || c;
         if (last && cur) this.label([(last[0] + cur[0]) / 2, (last[1] + cur[1]) / 2], fmt(Math.hypot(cur[0] - last[0], cur[1] - last[1])) + " mm");
       } else {
-        const a = dr.a, b = dr.b || a; let ent = null; const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
-        if (dr.type === "rect") ent = { type: "rect", cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2, w: Math.abs(b[0] - a[0]), h: Math.abs(b[1] - a[1]), r: 0, a: 0 };
-        if (dr.type === "circle") ent = { type: "circle", cx: a[0], cy: a[1], d: L * 2 };
-        if (dr.type === "polygon") ent = { type: "polygon", cx: a[0], cy: a[1], d: L * 2, n: 6, a: Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI };
-        if (dr.type === "slot") ent = { type: "slot", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: Math.max(this.snapStep, Math.round(L / 3)) };
-        if (dr.type === "ellipse") ent = ellipseOf(a, b);
+        let ent = null, L = 0;
+        if (dr.clicks) {
+          const q = [...dr.clicks, c].filter(Boolean); L = 1;
+          if (q.length === 2) { const A = this.toS(q[0]), B = this.toS(q[1]); el("path", { d: `M${A.join(" ")}L${B.join(" ")}`, class: "draft" }, svg); this.label([(q[0][0] + q[1][0]) / 2, (q[0][1] + q[1][1]) / 2], fmt(Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1])) + " mm"); }
+          if (q.length >= 3) ent = entOf(dr.type, q[0], q[1], q[2], this.snapStep);
+          for (const k of dr.clicks) { const P = this.toS(k); el("circle", { cx: P[0], cy: P[1], r: 3.5, class: "snap key" }, svg); }
+        } else {
+          const a = dr.a, b = dr.b || a; L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          ent = entOf(dr.type, a, b, null, this.snapStep);
+        }
         if (ent && L > 0) {
           const pts = outline(ent).map((p) => this.toS(p));
           el("path", { d: "M" + pts.map((p) => p.join(" ")).join("L") + "Z", class: "draft" }, svg);
