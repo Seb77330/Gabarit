@@ -26,7 +26,7 @@ function buildModel(ents, raws) {
   };
   for (const o of ents) {
     const r = rawById.get(o.id); if (!r) continue;
-    if (o.type === "poly" || o.type === "path") {
+    if (o.type === "poly" || o.type === "path" || o.type === "spline") {
       o.pts.forEach((p, i) => {
         addVar(o, i + ".x", () => p[0], (v) => (p[0] = v), r.pts?.[i]?.[0]);
         addVar(o, i + ".y", () => p[1], (v) => (p[1] = v), r.pts?.[i]?.[1]);
@@ -43,7 +43,7 @@ function buildModel(ents, raws) {
   const pt = (ref) => {
     if (ref.e === "origin") return [0, 0];
     const o = byId.get(ref.e); if (!o) return null;
-    if (o.type === "poly" || o.type === "path") { const p = o.pts[ref.k]; return p ? [p[0], p[1]] : null; }
+    if (o.type === "poly" || o.type === "path" || o.type === "spline") { const p = o.pts[ref.k]; return p ? [p[0], p[1]] : null; }
     if (o.type === "slot") return ref.k === 1 ? [o.x2, o.y2] : [o.x1, o.y1];
     return [o.cx, o.cy];
   };
@@ -190,7 +190,7 @@ export function writeBack(ents, raws) {
   const byId = new Map(ents.map((o) => [o.id, o]));
   for (const e of raws) {
     const o = byId.get(e.id); if (!o) continue;
-    if (e.type === "poly" || e.type === "path") {
+    if (e.type === "poly" || e.type === "path" || e.type === "spline") {
       e.pts.forEach((p, i) => { const q = o.pts[i]; if (!q) return; if (isNum(p[0])) p[0] = r6(q[0]); if (isNum(p[1])) p[1] = r6(q[1]); if (p[2] !== undefined && p[2] !== "" && isNum(p[2])) p[2] = r6(q[2]); });
     } else {
       for (const k of ["cx", "cy", "d", "x1", "y1", "x2", "y2"]) if (k in e && isNum(e[k]) && typeof o[k] === "number") e[k] = r6(o[k]);

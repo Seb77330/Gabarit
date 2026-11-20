@@ -12,8 +12,10 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 | Cotes pilotantes, équations, variables globales | ✅ (paramètres nommés, calculs dans toutes les cases) |
 | Contraintes géométriques (horizontal, vertical, parallèle, perpendiculaire, égal, tangent, coïncident, symétrique, fixe) et solveur, degrés de liberté | ✅ v0.3 |
 | Chemins ouverts (pour balayage) | ✅ v0.2 |
-| Splines, ellipses, texte | 🗓️ |
-| Convertir les entités, décaler, ajuster, miroir d'esquisse, répétition d'esquisse | 🗓️ (aujourd'hui : arêtes projetées en pointillé et accroche) |
+| Splines (courbes lisses), ellipses | ✅ v0.5 |
+| Texte | 🗓️ |
+| Miroir d'esquisse, décalage d'entités | ✅ v0.5 |
+| Convertir les entités, ajuster/prolonger, répétition d'esquisse | 🗓️ (aujourd'hui : arêtes projetées en pointillé et accroche) |
 | Esquisse 3D | ❌ |
 
 ## 2. Fonctions de pièce
@@ -30,9 +32,11 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 | Balayage (sweep) | ✅ v0.2 |
 | Dépouille | ✅ v0.2 |
 | Répétition et symétrie de fonctions choisies, répétition en grille (2 directions) | ✅ v0.2 |
-| Extrusion « jusqu'à la face », dépouille dans l'extrusion | 🗓️ |
+| Extrusion « jusqu'à la face » (parallèle ou inclinée) | ✅ v0.5 |
+| Extrusion « jusqu'au suivant », dépouille dans l'extrusion | 🗓️ |
 | Congés à rayon variable, congés de face | 🗓️ |
-| Nervures, filetages, hélices et ressorts, enroulement, déformation | 🗓️ |
+| Nervures, filetages ISO (vis et taraudage), hélices et ressorts | ✅ v0.5 |
+| Enroulement, déformation | 🗓️ |
 | Pièces multicorps, combiner, découper | 🗓️ |
 | Configurations (familles de pièces) | 🗓️ (les paramètres en font déjà une partie) |
 | Tôlerie, soudures, moules, surfaces avancées | ❌ pour l'instant |
@@ -53,7 +57,8 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 |---|---|
 | Export STL, STEP | ✅ |
 | Import STEP, STL | ✅ v0.2 |
-| Export 3MF, OBJ, DXF/DWG | 🗓️ |
+| Export 3MF, OBJ, DXF d'esquisse | ✅ v0.5 |
+| DXF/DWG des mises en plan | 🗓️ |
 
 ## 5. Mises en plan
 | SolidWorks | Gabarit |

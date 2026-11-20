@@ -138,7 +138,7 @@ export class Viewer {
     const h = this.raycaster.intersectObject(this.mesh)[0]; if (!h) return null;
     const idx = h.faceIndex * 3;
     const g = this.data.faceGroups.find((x) => idx >= x.start && idx < x.start + x.count);
-    return g ? { faceId: g.faceId, point: h.point.toArray(), info: this.data.faces[g.faceId] || null } : null;
+    return g ? { faceId: g.faceId, point: h.point.toArray(), info: this.data.faces[g.faceId] || null, normal: h.face ? h.face.normal.toArray() : null } : null;
   }
   hitEdge(e) {
     if (!this.edgeObjs?.length) return null;

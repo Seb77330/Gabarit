@@ -204,3 +204,4 @@ body.asm .params-box { display: none; }
 table.bom { border-collapse: collapse; width: 100%; font-size: 13px; }
 table.bom th, table.bom td { border-bottom: 1px solid var(--line, #dde2e8); padding: 6px 8px; text-align: left; }
 table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
+@media (max-width: 1600px) { .tools .tbtn { min-width: 54px; padding: 6px 3px 5px; } }

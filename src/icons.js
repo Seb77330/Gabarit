@@ -29,6 +29,11 @@ export const ICONS = {
   measure: s('<path d="M3 17 17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>'),
   section: s('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M2 12h20" stroke-dasharray="2 2"/>'),
   drawing: s('<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 16h18M14 16v4"/><rect x="6" y="7" width="5" height="6"/><circle cx="16" cy="10" r="2.5"/>'),
+  ellipse: s('<ellipse cx="12" cy="12" rx="9" ry="5.5"/>'),
+  spline: s('<path d="M3 16c3-8 6-8 9 0s6 8 9 0"/><circle cx="3" cy="16" r="1.3" fill="currentColor"/><circle cx="12" cy="16" r="1.3" fill="currentColor"/><circle cx="21" cy="16" r="1.3" fill="currentColor"/>'),
+  rib: s('<path d="M4 20V5h3v12h13v3z"/><path d="M7 15l9-8" stroke-width="3"/>'),
+  thread: s('<rect x="8" y="3" width="8" height="18" rx="1"/><path d="M8 7l8 2M8 11l8 2M8 15l8 2"/>'),
+  helix: s('<path d="M7 4c10 0 10 3 0 3s-10 3 0 3 10 3 0 3-10 3 0 3 10 3 0 3"/>'),
   path: s('<path d="M4 18c3-9 7 2 10-6 1-3 3-5 6-6"/><circle cx="4" cy="18" r="1.3" fill="currentColor"/><circle cx="20" cy="6" r="1.3" fill="currentColor"/>'),
   done: s('<path d="M5 12l5 5 9-10"/>'),
 };

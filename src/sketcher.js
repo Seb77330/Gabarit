@@ -1,5 +1,5 @@
 // Éditeur d'esquisse 2D (SVG) : tracé, accroche à la grille, cotes, déplacement.
-import { evalEntity, outline, segPts, ENT_FIELDS } from "./geo.js";
+import { evalEntity, outline, segPts, ENT_FIELDS, hasPts, isOpen } from "./geo.js";
 import { varsMap } from "./expr.js";
 import { solveSketch, C_GLYPH } from "./constraints.js";
 
@@ -7,6 +7,13 @@ const NS = "http://www.w3.org/2000/svg";
 const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
 const fmt = (v) => { const r = Math.round(v * 1000) / 1000; return String(r).replace(".", ","); };
 const num = (v) => Math.round(v * 1000) / 1000;
+// Ellipse tracée du centre a vers le coin b de son rectangle englobant.
+function ellipseOf(a, b) {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  let rx = num(Math.abs(b[0] - a[0])), ry = num(Math.abs(b[1] - a[1]));
+  if (!rx) rx = num(L / 2) || 1; if (!ry) ry = num(rx / 2) || 1;
+  return { type: "ellipse", cx: a[0], cy: a[1], rx, ry, a: 0 };
+}
 let uid = 0; export const newId = (p = "e") => p + Date.now().toString(36) + (uid++).toString(36);
 
 export class Sketcher {
@@ -19,7 +26,7 @@ export class Sketcher {
     svg.addEventListener("pointerup", (e) => this.up(e));
     svg.addEventListener("dblclick", (e) => {
       e.preventDefault();
-      if (this.draft?.type === "poly" || this.draft?.type === "path") { this.finishPoly(); return; }
+      if (hasPts(this.draft?.type)) { this.finishPoly(); return; }
       const g = this.dimAt(e); if (g && (this.sel || g.getAttribute("data-cid"))) this.editDim(g);
     });
     svg.addEventListener("wheel", (e) => {
@@ -60,6 +67,9 @@ export class Sketcher {
         o.pts.forEach((q, i) => consider({ e: o.id, k: i, kind: "pt" }, Math.hypot(q[0] - p[0], q[1] - p[1]) * 0.6));
         const n = o.pts.length;
         for (let i = 0; i < (o.type === "path" ? n - 1 : n); i++) { const a = o.pts[i], b = o.pts[(i + 1) % n]; consider({ e: o.id, k: i, kind: "seg" }, dSeg(segPts([a, b], false).concat([[b[0], b[1]]]))); }
+      } else if (o.type === "spline") {
+        o.pts.forEach((q, i) => consider({ e: o.id, k: i, kind: "pt" }, Math.hypot(q[0] - p[0], q[1] - p[1]) * 0.6));
+        const ol = outline(o); consider({ e: o.id, kind: "ent" }, dSeg(o.closed ? ol.concat([ol[0]]) : ol));
       } else if (o.type === "slot") {
         consider({ e: o.id, k: 0, kind: "pt" }, Math.hypot(o.x1 - p[0], o.y1 - p[1]) * 0.6);
         consider({ e: o.id, k: 1, kind: "pt" }, Math.hypot(o.x2 - p[0], o.y2 - p[1]) * 0.6);
@@ -86,9 +96,9 @@ export class Sketcher {
   keyPoints() {
     const pts = [[0, 0]];
     for (const o of this.evaluated()) {
-      if (o.type === "circle" || o.type === "polygon" || o.type === "rect" || o.type === "point") pts.push([o.cx, o.cy]);
+      if (o.type === "circle" || o.type === "polygon" || o.type === "rect" || o.type === "point" || o.type === "ellipse") pts.push([o.cx, o.cy]);
       if (o.type === "slot") pts.push([o.x1, o.y1], [o.x2, o.y2]);
-      if (o.type === "poly" || o.type === "path") pts.push(...o.pts.map((p) => [p[0], p[1]]));
+      if (hasPts(o.type)) pts.push(...o.pts.map((p) => [p[0], p[1]]));
       if (o.type === "rect" && !o.r) pts.push(...outline(o));
       if (o.type === "polygon") pts.push(...outline(o));
     }
@@ -115,7 +125,7 @@ export class Sketcher {
     for (const o of this.evaluated()) {
       if (o.type === "point") { const d = Math.hypot(o.cx - p[0], o.cy - p[1]); if (d < bd) { bd = d; best = o.id; } continue; }
       const pts = outline(o);
-      for (let i = 0; i < pts.length - (o.type === "path" ? 1 : 0); i++) {
+      for (let i = 0; i < pts.length - (isOpen(o) ? 1 : 0); i++) {
         const a = pts[i], b = pts[(i + 1) % pts.length];
         const dx = b[0] - a[0], dy = b[1] - a[1]; const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
         const d = Math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
@@ -163,7 +173,7 @@ export class Sketcher {
       this.sel = id; this.api.select(id);
       if (sub && sub.e !== "origin" && !e.shiftKey) {
         const ent = this.api.getSketch().entities.find((x) => x.id === sub.e);
-        if (sub.kind === "pt" && typeof sub.k === "number" && (ent.type === "poly" || ent.type === "path")) this.drag = { kind: "vertex", i: sub.k, id: sub.e };
+        if (sub.kind === "pt" && typeof sub.k === "number" && hasPts(ent.type)) this.drag = { kind: "vertex", i: sub.k, id: sub.e };
         else this.drag = { kind: "move", id: sub.e, start: this.snap(e).p, orig: JSON.parse(JSON.stringify(ent)), moved: false };
       } else if (!sub) this.drag = { kind: "pan", start: [e.clientX, e.clientY], pan: [...this.pan] };
       if (mi >= 0 && !e.shiftKey && sub?.kind === "seg") this.drag = { kind: "bend", i: mi, start: [e.clientX, e.clientY] };
@@ -171,11 +181,11 @@ export class Sketcher {
     }
     const { p } = this.snap(e, this.draft?.pts?.at(-1) || this.draft?.a);
     if (this.draft?.click) { this.draft.b = p; this.makeFromDraft(); return; }
-    if (t === "poly" || t === "path") {
+    if (hasPts(t)) {
       if (!this.draft) this.draft = { type: t, pts: [p], cur: p };
       else {
         const f = this.draft.pts[0];
-        if (t === "poly" && this.draft.pts.length >= 3 && Math.hypot(f[0] - p[0], f[1] - p[1]) * this.zoom < 9) { this.finishPoly(); return; }
+        if (t !== "path" && this.draft.pts.length >= 3 && Math.hypot(f[0] - p[0], f[1] - p[1]) * this.zoom < 9) { this.draft.closed = true; this.finishPoly(); return; }
         const last = this.draft.pts.at(-1); if (last[0] !== p[0] || last[1] !== p[1]) this.draft.pts.push(p);
       }
       this.render(); return;
@@ -201,7 +211,7 @@ export class Sketcher {
         const sh = (k, d) => { const v = Number(String(o[k]).replace(",", ".")); if (isFinite(v)) ent[k] = num(v + d); };
         if ("cx" in o) { sh("cx", dx); sh("cy", dy); }
         if (o.type === "slot") { sh("x1", dx); sh("y1", dy); sh("x2", dx); sh("y2", dy); }
-        if (o.type === "poly" || o.type === "path") ent.pts = o.pts.map((q) => { const x = Number(q[0]), y = Number(q[1]); const r = [isFinite(x) ? num(x + dx) : q[0], isFinite(y) ? num(y + dy) : q[1]]; if (q[2]) r.push(q[2]); return r; });
+        if (hasPts(o.type)) ent.pts = o.pts.map((q) => { const x = Number(q[0]), y = Number(q[1]); const r = [isFinite(x) ? num(x + dx) : q[0], isFinite(y) ? num(y + dy) : q[1]]; if (q[2]) r.push(q[2]); return r; });
       }, true);
       return;
     }
@@ -222,14 +232,14 @@ export class Sketcher {
       return;
     }
     if (this.draft) {
-      if (this.draft.type === "poly") this.draft.cur = sn.p; else if (this.draft.dragging || this.draft.click) this.draft.b = sn.p;
+      if (hasPts(this.draft.type)) this.draft.cur = sn.p; else if (this.draft.dragging || this.draft.click) this.draft.b = sn.p;
     }
     this.render();
   }
   up(e) {
     const d = this.drag; this.drag = null;
     if (d && (d.kind === "move" || d.kind === "vertex" || d.kind === "bend")) { this.api.update(() => {}, false); return; }
-    if (!this.draft || this.draft.type === "poly" || !this.draft.dragging) return;
+    if (!this.draft || hasPts(this.draft.type) || !this.draft.dragging) return;
     const { a, b } = this.draft;
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
     if (L * this.zoom < 4) { // simple clic : on attend un deuxième clic
@@ -248,10 +258,12 @@ export class Sketcher {
     if (type === "circle") ent = { type, cx: a[0], cy: a[1], d: num(L * 2) };
     if (type === "polygon") ent = { type, cx: a[0], cy: a[1], d: num(L * 2), n: 6, a: num(Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI) };
     if (type === "slot") ent = { type, x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: num(Math.max(this.snapStep, Math.round(L / 3))) };
+    if (type === "ellipse") ent = ellipseOf(a, b);
     this.commitNew(ent);
   }
   finishPoly() {
-    const pts = this.draft.pts, type = this.draft.type; this.draft = null;
+    const pts = this.draft.pts, type = this.draft.type, closed = !!this.draft.closed; this.draft = null;
+    if (type === "spline") { if (pts.length < (closed ? 3 : 2)) { this.render(); return; } this.commitNew({ type, pts, closed }); return; }
     if (pts.length < (type === "path" ? 2 : 3)) { this.render(); return; }
     const ent = type === "path" ? { type, pts } : { type: "poly", pts, r: 0 };
     // contraintes automatiques : côtés tracés horizontaux ou verticaux
@@ -338,10 +350,10 @@ export class Sketcher {
       const cls = "ent" + (ent.id === this.sel ? " sel" : "") + (ent.construction ? " constr" : "");
       if (ent.type === "point") { const p = this.toS([ent.cx, ent.cy]); el("circle", { cx: p[0], cy: p[1], r: 4, class: cls + " pt" }, svg); continue; }
       const pts = outline(ent).map((p) => this.toS(p));
-      el("path", { d: "M" + pts.map((p) => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L") + (ent.type === "path" ? "" : "Z"), class: cls + (ent.type === "path" ? " open" : "") }, svg);
+      el("path", { d: "M" + pts.map((p) => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L") + (isOpen(ent) ? "" : "Z"), class: cls + (isOpen(ent) ? " open" : "") }, svg);
       if (ent.id === this.sel) this.drawDims(ent);
-      if (ent.id === this.sel && (ent.type === "poly" || ent.type === "path")) {
-        for (const m of this.midHandles(ent)) { const p = this.toS(m.p); el("circle", { cx: p[0], cy: p[1], r: 4, class: "handle mid" }, svg); }
+      if (ent.id === this.sel && hasPts(ent.type)) {
+        if (ent.type !== "spline") for (const m of this.midHandles(ent)) { const p = this.toS(m.p); el("circle", { cx: p[0], cy: p[1], r: 4, class: "handle mid" }, svg); }
         for (const q of ent.pts) { const p = this.toS(q); el("rect", { x: p[0] - 4, y: p[1] - 4, width: 8, height: 8, class: "handle" }, svg); }
       }
     }
@@ -351,8 +363,9 @@ export class Sketcher {
     const dr = this.draft;
     if (dr) {
       const c = this.cursor?.p;
-      if (dr.type === "poly" || dr.type === "path") {
-        const pts = [...dr.pts, dr.cur || c].filter(Boolean).map((p) => this.toS(p));
+      if (hasPts(dr.type)) {
+        const raw = [...dr.pts, dr.cur || c].filter(Boolean);
+        const pts = (dr.type === "spline" && raw.length > 2 ? outline({ type: "spline", pts: raw, closed: false }) : raw).map((p) => this.toS(p));
         el("path", { d: "M" + pts.map((p) => p.join(" ")).join("L"), class: "draft" }, svg);
         const last = dr.pts.at(-1), cur = dr.cur || c;
         if (last && cur) this.label([(last[0] + cur[0]) / 2, (last[1] + cur[1]) / 2], fmt(Math.hypot(cur[0] - last[0], cur[1] - last[1])) + " mm");
@@ -362,6 +375,7 @@ export class Sketcher {
         if (dr.type === "circle") ent = { type: "circle", cx: a[0], cy: a[1], d: L * 2 };
         if (dr.type === "polygon") ent = { type: "polygon", cx: a[0], cy: a[1], d: L * 2, n: 6, a: Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI };
         if (dr.type === "slot") ent = { type: "slot", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: Math.max(this.snapStep, Math.round(L / 3)) };
+        if (dr.type === "ellipse") ent = ellipseOf(a, b);
         if (ent && L > 0) {
           const pts = outline(ent).map((p) => this.toS(p));
           el("path", { d: "M" + pts.map((p) => p.join(" ")).join("L") + "Z", class: "draft" }, svg);
@@ -445,6 +459,10 @@ export class Sketcher {
       const P = (x, y) => [o.cx + x * c - y * s, o.cy + x * s + y * c];
       this.dimLine(P(-hw, hh), P(hw, hh), -22, fmt(o.w), "w");
       this.dimLine(P(hw, hh), P(hw, -hh), -22, fmt(o.h), "h");
+    } else if (o.type === "ellipse") {
+      const r = (o.a || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+      this.dimLine([o.cx, o.cy], [o.cx + o.rx * c, o.cy + o.rx * sn], 0, "a " + fmt(o.rx), "rx");
+      this.dimLine([o.cx, o.cy], [o.cx - o.ry * sn, o.cy + o.ry * c], 0, "b " + fmt(o.ry), "ry");
     } else if (o.type === "circle" || o.type === "polygon") {
       this.label([o.cx + o.d * 0.36, o.cy + o.d * 0.36], "⌀ " + fmt(o.d), "d");
     } else if (o.type === "slot") {

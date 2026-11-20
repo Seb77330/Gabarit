@@ -2,7 +2,8 @@
 import * as R from "replicad";
 import { evalExpr, varsMap } from "./expr.js";
 import { solveSketch } from "./constraints.js";
-import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, toWorld, cross, dot, norm } from "./geo.js";
+import { objText, threeMF } from "./meshfiles.js";
+import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, toWorld, cross, dot, norm, bezierSegs, outline } from "./geo.js";
 
 let lastShape = null;
 
@@ -26,6 +27,12 @@ function entityDrawing(o) {
       .threePointsArcTo([o.x2 - px, o.y2 - py], [o.x2 + ux * r, o.y2 + uy * r])
       .lineTo([o.x1 - px, o.y1 - py])
       .threePointsArcTo([o.x1 + px, o.y1 + py], [o.x1 - ux * r, o.y1 - uy * r]).close();
+  } else if (o.type === "ellipse") {
+    d = o.rx >= o.ry ? R.drawEllipse(o.rx, o.ry) : R.drawEllipse(o.ry, o.rx).rotate(90, [0, 0]);
+    if (o.a) d = d.rotate(o.a, [0, 0]);
+    d = d.translate(o.cx, o.cy);
+  } else if (o.type === "spline") {
+    d = wireDrawing(o);
   } else if (o.type === "poly") {
     let pen = R.draw(o.pts[0].slice(0, 2));
     const n = o.pts.length;
@@ -38,6 +45,129 @@ function entityDrawing(o) {
     if (o.r > 0) d = d.fillet(o.r);
   }
   return d;
+}
+
+// Dessin d'un contour à points (contour libre, chemin, courbe), ouvert ou fermé.
+function wireDrawing(o) {
+  const pts = o.pts, n = pts.length, closed = o.type === "poly" || (o.type === "spline" && o.closed);
+  let pen = R.draw(pts[0].slice(0, 2));
+  if (o.type === "spline") {
+    const segs = bezierSegs(pts, closed);
+    segs.forEach(([, c1, c2, p1], i) => { pen = pen.cubicBezierCurveTo(i === segs.length - 1 && closed ? pts[0].slice(0, 2) : p1, c1, c2); });
+    return closed ? pen.close() : pen.done();
+  }
+  for (let i = 1; i <= (closed ? n : n - 1); i++) {
+    const a = pts[i - 1], b = pts[i % n];
+    if (closed && i === n) { if (a[2]) pen = pen.sagittaArcTo(b.slice(0, 2), a[2]); break; }
+    pen = a[2] ? pen.sagittaArcTo(b.slice(0, 2), a[2]) : pen.lineTo(b.slice(0, 2));
+  }
+  let d = closed ? pen.close() : pen.done();
+  if (o.type === "poly" && o.r > 0) d = d.fillet(o.r);
+  return d;
+}
+
+// ---------- Extrusion jusqu'à une face, nervure, filetage, hélice ----------
+const v3 = { sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k] };
+const unit = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+function perpOf(n) { return unit(cross(n, Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0])); }
+function nearestFace(shape, ref) {
+  const { found, test } = nearestFilter(shape.faces, [ref], Math.max(0.05, sizeOf(shape) * 0.002), shape);
+  return found ? shape.faces.find(test) : null;
+}
+function extrudeToFace(drawing, pl, f, shape) {
+  if (!shape) throw new Error("Il n’y a pas encore de pièce pour s’arrêter sur une face");
+  if (!f.upTo) throw new Error("Clique sur la face où l’extrusion doit s’arrêter");
+  const face = nearestFace(shape, f.upTo); if (!face) throw new Error("La face d’arrivée n’existe plus : choisis-la à nouveau");
+  if (face.geomType !== "PLANE") throw new Error("Choisis une face plane comme face d’arrivée");
+  const cv = face.center, c = [cv.x, cv.y, cv.z]; const nv = face.normalAt(cv); const fn = unit([nv.x, nv.y, nv.z]);
+  const n = pl.n; const dd = dot(v3.sub(c, pl.origin), n); const cosA = dot(fn, n);
+  if (Math.abs(dd) < 1e-6) throw new Error("La face d’arrivée est dans le plan de l’esquisse");
+  if (Math.abs(cosA) > 0.99999) {
+    const p2 = dd < 0 ? { ...pl, origin: toWorld(pl, 0, 0, dd) } : pl;
+    return drawing.sketchOnPlane(rPlane(p2)).extrude(Math.abs(dd));
+  }
+  // face inclinée : extrusion longue coupée par le demi-espace de la face
+  const L = sizeOf(shape) * 4;
+  const p2 = dd < 0 ? { ...pl, origin: toWorld(pl, 0, 0, -L) } : pl;
+  const long = drawing.sketchOnPlane(rPlane(p2)).extrude(L);
+  const s = dot(v3.sub(pl.origin, c), fn) > 0 ? 1 : -1;
+  const hp = new R.Plane(c, perpOf(fn), v3.mul(fn, s));
+  const half = R.drawRectangle(L * 2, L * 2).sketchOnPlane(hp).extrude(L * 2);
+  return long.intersect(half);
+}
+function ribSolid(sk, t, flip, shape) {
+  if (!(t > 0)) throw new Error("L’épaisseur doit être plus grande que 0");
+  const pe = sk.ents.find((e) => !e.construction && (e.type === "path" || (e.type === "spline" && !e.closed)));
+  if (!pe) throw new Error("L’esquisse de la nervure doit contenir un trait ouvert (outil « Chemin » ou « Courbe »)");
+  const line = outline(pe); const a = line[0], b = line[line.length - 1];
+  const dx = b[0] - a[0], dy = b[1] - a[1], Ld = Math.hypot(dx, dy) || 1;
+  const L = sizeOf(shape) * 3;
+  const [lo, hi] = shape.boundingBox.bounds; const box = R.makeBox(lo, hi);
+  const pl = { ...sk.pl, origin: toWorld(sk.pl, 0, 0, -t / 2) };
+  const side = (sg) => {
+    const nx = -dy / Ld * sg, ny = dx / Ld * sg;
+    const poly = [...line, [b[0] + nx * L, b[1] + ny * L], [a[0] + nx * L, a[1] + ny * L]];
+    let pen = R.draw(poly[0]); for (let i = 1; i < poly.length; i++) pen = pen.lineTo(poly[i]);
+    return pen.close().sketchOnPlane(rPlane(pl)).extrude(t).intersect(box);
+  };
+  // côté automatique : celui qui ajoute le moins de matière (l'espace fermé entre le trait et les parois)
+  const cands = [side(1), side(-1)].map((sl) => { let v = Infinity; try { v = R.measureVolume(sl.cut(shape)); } catch { /* */ } return { sl, v: v > 1e-6 ? v : Infinity }; });
+  cands.sort((x, y) => x.v - y.v);
+  return (flip ? cands[1] : cands[0]).sl;
+}
+// Balayage d'un profil le long d'une hélice d'axe (c, d).
+function helixSweep(c, d, r, pitch, H, profile) {
+  d = unit(d);
+  const helix = R.makeHelix(pitch, H, r, c, d);
+  const sp = helix.startPoint; const start = [sp.x, sp.y, sp.z];
+  const rad = v3.sub(start, c); const u = unit(v3.sub(rad, v3.mul(d, dot(rad, d))));
+  const v = cross(d, u);
+  const tan = unit(v3.add(v3.mul(v, 2 * Math.PI * r), v3.mul(d, pitch)));
+  const wire = profile(u, v, d, start, tan);
+  return R.genericSweep(wire, helix, { frenet: true });
+}
+function threadCut(f, vars, shape) {
+  if (!f.face) throw new Error("Clique sur la face cylindrique à fileter");
+  const face = nearestFace(shape, f.face); if (!face) throw new Error("La face choisie n’existe plus : choisis-la à nouveau");
+  if (face.geomType !== "CYLINDRE") throw new Error("Choisis une face cylindrique (un axe ou un trou)");
+  const oc = R.getOC(); const ad = new oc.BRepAdaptor_Surface(face.wrapped, true); const cy = ad.Cylinder(); const ax = cy.Axis();
+  const l = ax.Location(), dd = ax.Direction(); let p0 = [l.X(), l.Y(), l.Z()]; let d = [dd.X(), dd.Y(), dd.Z()]; const r = cy.Radius(); ad.delete();
+  const ts = []; for (const e of face.edges) for (const q of [e.startPoint, e.endPoint]) ts.push(dot(v3.sub([q.x, q.y, q.z], p0), d));
+  let t0 = Math.min(...ts), t1 = Math.max(...ts);
+  if (f.flip) { d = v3.mul(d, -1); [t0, t1] = [-t1, -t0]; }
+  const pitch = evalExpr(f.pitch, vars); if (!(pitch > 0)) throw new Error("Le pas doit être plus grand que 0");
+  const internal = f.kind === "int";
+  const h = (internal ? 0.5413 : 0.6134) * pitch;
+  if (h >= r * 0.9) throw new Error("Le pas est trop grand pour ce diamètre");
+  let len = f.len === undefined || f.len === "" ? t1 - t0 : evalExpr(f.len, vars);
+  if (!(len > 0)) throw new Error("La longueur doit être plus grande que 0");
+  len = Math.min(len, t1 - t0);
+  const e = h * 0.15, half = (h + e) * Math.tan(Math.PI / 6);
+  const prof = (u, v, dz, start) => {
+    const base = internal ? -e : e, tip = internal ? h : -h;
+    const P = (radial, axial) => v3.add(v3.add(start, v3.mul(u, radial)), v3.mul(dz, axial));
+    const pts = [P(base, -half), P(tip, 0), P(base, half)];
+    return R.assembleWire([R.makeLine(pts[0], pts[1]), R.makeLine(pts[1], pts[2]), R.makeLine(pts[2], pts[0])]);
+  };
+  // Le noyau calcule mal les opérations avec une longue hélice : on creuse par tronçons de deux tours au plus.
+  const turns = len / pitch; if (turns > 400) throw new Error("Trop de tours de filet (400 au maximum)");
+  let vol = R.measureVolume(shape);
+  const cutPiece = (z, hgt) => {
+    const c = v3.add(p0, v3.mul(d, t0 + z));
+    const next = shape.cut(helixSweep(c, d, r, pitch, hgt, prof));
+    const v2 = R.measureVolume(next);
+    if (!(v2 < vol - 1e-9)) return false;
+    shape = next; vol = v2; return true;
+  };
+  for (let z = 0; z < len - 1e-9; z += 2 * pitch) {
+    const hgt = Math.min(2 * pitch, len - z);
+    if (!cutPiece(z, hgt)) {
+      const h1 = Math.min(pitch, hgt);
+      const ok = cutPiece(z, h1) && (hgt - h1 < 1e-9 || cutPiece(z + pitch, hgt - h1));
+      if (!ok) throw new Error("Le filet n’a pas pu être creusé à cet endroit : essaie une autre longueur ou un autre pas");
+    }
+  }
+  return shape;
 }
 
 function sketchDrawing(ents) {
@@ -177,7 +307,9 @@ export async function build(doc, opts = {}) {
         const sk = getSketch(f.sketch);
         const drawing = sketchDrawing(sk.ents);
         let solid;
-        if (f.type === "extrude") {
+        if (f.type === "extrude" && f.end === "face") {
+          solid = extrudeToFace(drawing, sk.pl, f, shape);
+        } else if (f.type === "extrude") {
           const dist = f.through && f.mode === "cut" ? sizeOf(shape) * 3 : evalExpr(f.dist, vars);
           if (!(dist > 0)) throw new Error("La distance doit être plus grande que 0");
           let pl = { ...sk.pl };
@@ -201,20 +333,33 @@ export async function build(doc, opts = {}) {
       } else if (f.type === "sweep") {
         const prof = getSketch(f.profile, "une esquisse de profil");
         const path = getSketch(f.path, "une esquisse de chemin");
-        const pe = path.ents.find((e) => (e.type === "path" || e.type === "poly") && !e.construction) || null;
-        if (!pe) throw new Error("L’esquisse du chemin doit contenir un chemin ou un contour libre");
+        const pe = path.ents.find((e) => (e.type === "path" || e.type === "spline") && !e.construction) || path.ents.find((e) => e.type === "poly" && !e.construction) || null;
+        if (!pe) throw new Error("L’esquisse du chemin doit contenir un chemin, une courbe ou un contour libre");
         const pd = sketchDrawing(prof.ents);
-        let pen = R.draw(pe.pts[0].slice(0, 2));
-        const pts = pe.pts, n = pts.length, closed = pe.type === "poly";
-        for (let i = 1; i <= (closed ? n : n - 1); i++) {
-          const a = pts[i - 1], b = pts[i % n];
-          pen = a[2] ? pen.sagittaArcTo(b.slice(0, 2), a[2]) : pen.lineTo(b.slice(0, 2));
-        }
-        let spineD = closed ? pen.close() : pen.done();
-        const rr = pe.type === "path" ? 0 : pe.r; if (rr > 0) spineD = spineD.fillet(rr);
-        const spine = spineD.sketchOnPlane(rPlane(path.pl));
+        let spine;
+        if (pe.type === "spline" && !pe.closed) {
+          // une seule courbe lisse (B-spline) : le balayage reste propre d'un bout à l'autre
+          const pts3 = outline(pe).map((q) => toWorld(path.pl, q[0], q[1]));
+          spine = new R.Sketch(R.assembleWire([R.makeBSplineApproximation(pts3, { tolerance: 1e-3, degMax: 5 })]));
+        } else spine = wireDrawing(pe).sketchOnPlane(rPlane(path.pl));
         const solid = spine.sweepSketch((plane, origin) => pd.sketchOnPlane(plane, origin), { frenet: true, transitionMode: "round" });
         apply(solid, f.mode, f.id);
+      } else if (f.type === "rib") {
+        need();
+        const sk = getSketch(f.sketch, "une esquisse avec un trait (chemin)");
+        apply(ribSolid(sk, evalExpr(f.t, vars), !!f.flip, shape), "add", f.id);
+      } else if (f.type === "thread") {
+        need();
+        shape = threadCut(f, vars, shape);
+      } else if (f.type === "helix") {
+        const pl = P(f.plane);
+        const D = evalExpr(f.d, vars), pitch = evalExpr(f.pitch, vars), H = evalExpr(f.height, vars), w = evalExpr(f.wire, vars);
+        if (!(D > 0 && pitch > 0 && H > 0 && w > 0)) throw new Error("Toutes les valeurs doivent être plus grandes que 0");
+        if (w >= pitch) throw new Error("Le fil est plus épais que le pas : les spires se touchent");
+        if (w >= D) throw new Error("Le fil est plus épais que le diamètre du ressort");
+        if (H / pitch > 200) throw new Error("Trop de spires (200 au maximum)");
+        const c = toWorld(pl, evalExpr(f.cx || "0", vars), evalExpr(f.cy || "0", vars));
+        apply(helixSweep(c, pl.n, D / 2, pitch, H, (u, v, d, start, tan) => R.assembleWire([R.makeCircle(w / 2, start, tan)])), f.mode || "add", f.id);
       } else if (f.type === "hole") {
         need();
         const tool = holeTool(f, vars, P(f.plane))(sizeOf(shape));
@@ -342,9 +487,16 @@ export function meshShape(shape) {
   };
 }
 
+function fineMesh(shape) {
+  const size = sizeOf(shape);
+  const m = shape.mesh({ tolerance: size / 5000, angularTolerance: 0.05 });
+  return { vertices: m.vertices, triangles: m.triangles };
+}
 export function exportShape(kind, opts = {}) {
   if (!lastShape) throw new Error("Rien à exporter : la pièce est vide");
   if (kind === "step") return lastShape.blobSTEP();
+  if (kind === "obj") return objText(fineMesh(lastShape), opts.name || "piece");
+  if (kind === "3mf") return threeMF([{ name: opts.name || "piece", ...fineMesh(lastShape) }]);
   const size = sizeOf(lastShape);
   return lastShape.blobSTL({ tolerance: opts.fine ? size / 5000 : size / 1500, angularTolerance: opts.fine ? 0.05 : 0.15, binary: true });
 }
@@ -421,6 +573,8 @@ export function exportAssembly(kind, comps) {
   const items = comps.map((c) => { const h = asmCache.get(c.id); return h ? { shape: placed(h.shape, c.pos, c.rot), name: c.name, color: c.color } : null; }).filter(Boolean);
   if (!items.length) throw new Error("L’assemblage est vide");
   if (kind === "step") return R.exportSTEP(items);
+  if (kind === "3mf") return threeMF(items.map((i) => ({ name: i.name, ...fineMesh(i.shape) })));
+  if (kind === "obj") return objText(fineMesh(R.makeCompound(items.map((i) => i.shape))), "assemblage");
   const comp = R.makeCompound(items.map((i) => i.shape));
   return comp.blobSTL({ tolerance: 0.05, angularTolerance: 0.1, binary: true });
 }

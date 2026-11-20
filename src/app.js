@@ -8,6 +8,7 @@ import { exampleDoc } from "./example.js";
 import { sheetSVG } from "./drawing.js";
 import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
 import { createAssemblyUI } from "./assembly.js";
+import { sketchDXF } from "./dxf.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => {
@@ -66,6 +67,9 @@ const TYPES = {
   sweep: { label: "Balayage", icon: "sweep" },
   draft: { label: "Dépouille", icon: "draft" },
   import: { label: "Import", icon: "import" },
+  rib: { label: "Nervure", icon: "rib" },
+  thread: { label: "Filetage", icon: "thread" },
+  helix: { label: "Ressort", icon: "helix" },
 };
 const MATERIALS = { pla: ["PLA", 1.24], petg: ["PETG", 1.27], abs: ["ABS", 1.04], resine: ["Résine", 1.15], alu: ["Aluminium", 2.7], acier: ["Acier", 7.85], inox: ["Inox", 8.0], laiton: ["Laiton", 8.5], bois: ["Bois (chêne)", 0.75] };
 const STORE = "gabarit-doc-v1";
@@ -205,15 +209,16 @@ function doExport(kind) {
   if (isAsm()) {
     const list = asmUI.exportComps(); if (!list.length) { toast("Insère d’abord des pièces dans l’assemblage."); return; }
     const req = ++exportReq; showBusy(true, "Export en cours…");
-    pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind === "step" ? "step" : "stl"}`); toast(kind === "step" ? "Assemblage STEP enregistré (une pièce par composant)." : "Assemblage STL enregistré."); });
+    pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind}`); toast(kind === "step" ? "Assemblage STEP enregistré (une pièce par composant)." : `Assemblage ${kind.toUpperCase()} enregistré.`); });
     worker.postMessage({ type: "asmExport", req, kind, comps: list }); return;
   }
   if (!st.mesh) { toast("Rien à exporter pour l’instant : la pièce est vide."); return; }
   if (st.stopAt !== null || st.pick || st.editSketch) { toast("Termine l’édition en cours, puis remets la fin de la pièce tout en bas."); return; }
   const req = ++exportReq;
   showBusy(true, "Export en cours…");
-  pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind === "step" ? "step" : "stl"}`); toast(kind === "step" ? "Fichier STEP enregistré." : "Fichier STL enregistré, prêt pour ton trancheur."); });
-  worker.postMessage({ type: "export", req, kind, opts: { fine: true } });
+  const msgs = { step: "Fichier STEP enregistré.", stl: "Fichier STL enregistré, prêt pour ton trancheur.", "3mf": "Fichier 3MF enregistré, prêt pour ton trancheur.", obj: "Fichier OBJ enregistré." };
+  pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind}`); toast(msgs[kind]); });
+  worker.postMessage({ type: "export", req, kind, opts: { fine: true, name: doc.name } });
 }
 const safeName = () => (doc.name || "piece").replace(/[\\/:*?"<>|]+/g, "-").trim() || "piece";
 function download(blob, name) {
@@ -224,8 +229,8 @@ function download(blob, name) {
 // ---------- Interface : outils ----------
 const TOOLBAR = [
   [["sketch", "Esquisse"], ["plane", "Plan"]],
-  [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"]],
-  [["hole", "Perçage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"]],
+  [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"], ["helix", "Ressort"]],
+  [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"]],
   [["mirror", "Symétrie"], ["pattern", "Répétition"], ["import", "Importer"]],
   [["measure", "Mesurer"], ["section", "Coupe"], ["drawing", "Mise en plan"]],
 ];
@@ -251,6 +256,9 @@ const TOOL_TIPS = {
   sweep: "Faire glisser un profil le long d’un chemin (tuyau, poignée, ressort plat…)",
   draft: "Incliner des faces pour le démoulage",
   import: "Importer une pièce STEP ou STL",
+  helix: "Créer un ressort (fil enroulé en hélice)",
+  thread: "Fileter un axe ou tarauder un trou (vrai filet en 3D)",
+  rib: "Ajouter un renfort à partir d’un simple trait d’esquisse",
   measure: "Mesurer une distance entre deux points de la pièce",
   section: "Couper la vue pour voir l’intérieur",
   drawing: "Créer le plan 2D de la pièce, à imprimer ou en PDF",
@@ -273,13 +281,25 @@ function toolAction(k) {
   }
   if (k === "sweep") {
     const sks = doc.features.slice(0, st.stopAt ?? doc.features.length).filter((f) => f.type === "sketch" && !f.suppressed);
-    const path = [...sks].reverse().find((f) => (f.entities || []).some((e) => e.type === "path"));
-    const prof = [...sks].reverse().find((f) => f !== path && !(f.entities || []).some((e) => e.type === "path"));
+    const isPath = (e) => e.type === "path" || (e.type === "spline" && !e.closed);
+    const path = [...sks].reverse().find((f) => (f.entities || []).some(isPath));
+    const prof = [...sks].reverse().find((f) => f !== path && !(f.entities || []).some(isPath));
     insertFeature({ id: newId("f"), type: "sweep", name: nextName("sweep"), profile: prof?.id || "", path: path?.id || "", mode: "add" });
     if (!path || !prof) toast("Il faut deux esquisses : un profil (par exemple un cercle centré sur l’origine) et un chemin (outil « Chemin »).");
     return;
   }
   if (k === "sketch") { choosePlane((plane) => createSketch(plane)); return; }
+  if (k === "helix") { choosePlane((plane) => insertFeature({ id: newId("f"), type: "helix", name: nextName("helix"), plane, cx: "0", cy: "0", d: "20", pitch: "5", height: "40", wire: "2", mode: "add" }), "Le ressort part de quel plan ?"); return; }
+  if (k === "rib") {
+    const isPath = (e) => e.type === "path" || (e.type === "spline" && !e.closed);
+    const used = new Set(doc.features.filter((f) => f.sketch).map((f) => f.sketch));
+    const sk = [...doc.features.slice(0, st.stopAt ?? doc.features.length)].reverse().find((f) => f.type === "sketch" && !used.has(f.id) && (f.entities || []).some(isPath));
+    const make = (id) => insertFeature({ id: newId("f"), type: "rib", name: nextName("rib"), sketch: id, t: "3", flip: false });
+    if (!st.mesh) { toast("Crée d’abord un volume : la nervure vient le renforcer."); return; }
+    if (sk) make(sk.id);
+    else { toast("Dessine un trait avec l’outil « Chemin » entre deux parois, puis clique sur « Terminer »."); choosePlane((plane) => createSketch(plane, make)); }
+    return;
+  }
   if (k === "extrude" || k === "cut" || k === "revolve") {
     const type = k === "cut" ? "extrude" : k;
     const sk = candidateSketch();
@@ -294,6 +314,10 @@ function toolAction(k) {
     return;
   }
   if (!st.mesh) { toast("Crée d’abord un volume (esquisse puis extrusion)."); return; }
+  if (k === "thread") {
+    const f = { id: newId("f"), type: "thread", name: nextName("thread"), kind: "ext", pitch: "1.5", len: "", flip: false };
+    insertFeature(f); startPick("cyl", f.id); return;
+  }
   if (k === "hole") {
     choosePlane((plane) => {
       const f = { id: newId("f"), type: "hole", name: nextName("hole"), plane, kind: "simple", d: "5", d2: "9", depth2: "3", angle: "90", depth: "10", through: true, points: [] };
@@ -371,6 +395,8 @@ function startPick(kind, featId) {
     edges: f?.type === "chamfer" ? "Clique sur les arêtes à chanfreiner. Reclique pour en retirer une." : "Clique sur les arêtes à arrondir. Reclique pour en retirer une.",
     faces: f?.type === "draft" ? "Clique sur les faces à incliner. Reclique pour en retirer une." : "Clique sur la ou les faces à ouvrir (elles seront retirées).",
     points: "Clique sur la face pour placer les trous. Tu peux corriger les cotes à droite.",
+    cyl: "Clique sur la face cylindrique à fileter : un axe (vis) ou l’intérieur d’un trou (taraudage).",
+    upto: "Clique sur la face plane où l’extrusion doit s’arrêter.",
   };
   banner(texts[kind], [["Terminé", () => stopPick(true)]]);
   viewer.setPick({ kind: kind === "edges" ? "edge" : "face", onPick: (hit) => onPick(hit) });
@@ -384,6 +410,24 @@ function stopPick(rebuild) {
 function onPick(hit) {
   const f = feat(st.pick.featId); if (!f) return;
   const tol = viewer.size / 120;
+  if (st.pick.kind === "cyl" || st.pick.kind === "upto") {
+    if (st.pick.kind === "cyl" && !hit.info?.cyl) { toast("Choisis une face cylindrique (un axe ou un trou)."); return; }
+    if (st.pick.kind === "upto" && !hit.info?.plane) { toast("Choisis une face plane."); return; }
+    const [lo, hi] = st.mesh.bb;
+    const p = hit.point.map((c) => Math.round(c * 1000) / 1000);
+    p.push(...[0, 1, 2].map((k) => Math.round(((hit.point[k] - lo[k]) / ((hi[k] - lo[k]) || 1)) * 1e5) / 1e5));
+    const key = st.pick.kind === "cyl" ? "face" : "upTo";
+    if (st.pick.kind === "cyl" && f.kind === "ext" && hit.info.r !== undefined) {
+      // devine : un trou si la normale du point cliqué regarde vers l'axe
+      const c = hit.info; const w = hit.point.map((x, i) => x - c.p[i]); const t = dot(w, c.d); const radial = w.map((x, i) => x - c.d[i] * t);
+      if (hit.normal && dot(hit.normal, radial) < 0) f.kind = "int";
+      const dia = 2 * c.r; const iso = [[3, 0.5], [4, 0.7], [5, 0.8], [6, 1], [8, 1.25], [10, 1.5], [12, 1.75], [16, 2], [20, 2.5], [24, 3], [30, 3.5], [36, 4]];
+      const target = f.kind === "int" ? dia / 0.85 : dia; const best = iso.reduce((a, b) => (Math.abs(b[0] - target) < Math.abs(a[0] - target) ? b : a));
+      f.pitch = String(best[1]);
+    }
+    mutate(() => { f[key] = p; });
+    stopPick(true); return;
+  }
   if (st.pick.kind === "edges" || st.pick.kind === "faces") {
     const key = st.pick.kind === "edges" ? "edges" : "faces";
     const [lo, hi] = st.mesh.bb;
@@ -538,6 +582,7 @@ function exprField(label, obj, key, unit = "mm", opts = {}) {
   const input = h("input", { type: "text", value: obj[key] ?? "", spellcheck: "false", inputmode: "decimal" });
   const check = () => {
     const raw = input.value;
+    if (opts.optional && !raw.trim()) { input.classList.remove("bad"); calc.classList.remove("bad"); calc.textContent = ""; input.placeholder = opts.optional; return; }
     try {
       const n = evalExpr(raw, v); input.classList.remove("bad"); calc.classList.remove("bad");
       calc.textContent = /^\s*-?[\d.,]+\s*$/.test(raw) ? "" : "= " + nf(n, 3) + (unit ? " " + unit : "");
@@ -627,8 +672,15 @@ function renderProps() {
     add(selectField("Esquisse utilisée", f.sketch, [["", "—"], ...sketchOptions(f)], (v) => mutate(() => { f.sketch = v; })));
     add(segField("Effet", f, "mode", [["add", "Ajouter de la matière"], ["cut", "Enlever de la matière"]]));
     add(segField("Sens", f, "dir", [["normal", "Normal"], ["inverse", "Inversé"], ["sym", "Des deux côtés"]]));
-    if (f.mode === "cut") add(checkField("À travers toute la pièce", f, "through"));
-    if (!(f.mode === "cut" && f.through)) add(exprField(f.dir === "sym" ? "Épaisseur totale" : "Distance", f, "dist"));
+    add(segField("Jusqu’à", f, "end", [["dist", "Une distance"], ["face", "Une face"]]));
+    if (f.end === "face") {
+      add(h("div", { class: "note" + (f.upTo ? "" : " err") }, f.upTo ? "Face d’arrivée choisie. Le sens est déduit de la face." : "Clique sur « Choisir la face d’arrivée »."));
+      add(h("div", { class: "btnrow" }, st.pick?.featId === f.id ? h("button", { class: "btn primary", onclick: () => stopPick(true) }, "Annuler") : h("button", { class: "btn primary", onclick: () => startPick("upto", f.id) }, "Choisir la face d’arrivée")));
+    } else {
+      add(segField("Sens", f, "dir", [["normal", "Normal"], ["inverse", "Inversé"], ["sym", "Des deux côtés"]]));
+      if (f.mode === "cut") add(checkField("À travers toute la pièce", f, "through"));
+      if (!(f.mode === "cut" && f.through)) add(exprField(f.dir === "sym" ? "Épaisseur totale" : "Distance", f, "dist"));
+    }
   }
   if (f.type === "revolve") {
     add(selectField("Esquisse utilisée", f.sketch, [["", "—"], ...sketchOptions(f)], (v) => mutate(() => { f.sketch = v; })));
@@ -665,6 +717,28 @@ function renderProps() {
     add(h("div", { class: "btnrow" },
       st.pick?.featId === f.id ? h("button", { class: "btn primary", onclick: () => stopPick(true) }, "Terminer la sélection") : h("button", { class: "btn primary", onclick: () => startPick("edges", f.id) }, "Choisir les arêtes"),
       n ? h("button", { class: "btn", onclick: () => { mutate(() => { f.edges = []; }); renderProps(); refreshMarkers(); } }, "Tout effacer") : null));
+  }
+  if (f.type === "rib") {
+    add(selectField("Esquisse du trait", f.sketch, [["", "—"], ...sketchOptions(f)], (v) => mutate(() => { f.sketch = v; })));
+    add(exprField("Épaisseur", f, "t", "mm", { step: 0.5 }));
+    add(checkField("Remplir de l’autre côté (si le côté choisi automatiquement ne convient pas)", f, "flip"));
+    add(h("div", { class: "note" }, "Dessine un simple trait (outil « Chemin ») entre deux parois, sur un plan qui coupe la pièce. La nervure remplit l’espace entre le trait et la pièce, centrée sur le plan de l’esquisse."));
+  }
+  if (f.type === "thread") {
+    add(segField("Type", f, "kind", [["ext", "Vis (extérieur)"], ["int", "Taraudage (trou)"]]));
+    add(exprField("Pas", f, "pitch", "mm", { step: 0.25 }));
+    add(exprField("Longueur", f, "len", "mm", { optional: "toute la face" }));
+    add(checkField("Commencer par l’autre bout", f, "flip"));
+    add(h("div", { class: "note" + (f.face ? "" : " err") }, f.face ? "Filet métrique ISO à 60°. Pour un taraudage, perce d’abord au diamètre de perçage (par exemple 8,5 mm pour M10)." : "Clique sur la face cylindrique à fileter."));
+    add(h("div", { class: "btnrow" }, st.pick?.featId === f.id ? h("button", { class: "btn primary", onclick: () => stopPick(true) }, "Annuler") : h("button", { class: "btn primary", onclick: () => startPick("cyl", f.id) }, f.face ? "Changer de face" : "Choisir la face")));
+  }
+  if (f.type === "helix") {
+    add(planeFields(f));
+    add(segField("Effet", f, "mode", [["add", "Ajouter de la matière"], ["cut", "Enlever"]]));
+    add(exprField("Diamètre moyen", f, "d"), exprField("Pas (écart entre deux spires)", f, "pitch"), exprField("Hauteur", f, "height"), exprField("Diamètre du fil", f, "wire", "mm", { step: 0.5 }));
+    add(exprField("Centre X", f, "cx"), exprField("Centre Y", f, "cy"));
+    const n = (() => { try { return evalExpr(f.height, vars) / evalExpr(f.pitch, vars); } catch { return 0; } })();
+    if (n) add(h("div", { class: "note" }, `${nf(n, 1)} spire(s).`));
   }
   if (f.type === "shell") {
     add(exprField("Épaisseur de paroi", f, "t", "mm", { step: 0.5 }));
@@ -798,7 +872,7 @@ function constraintPanel(f) {
 }
 
 // ---------- Mode esquisse ----------
-const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["poly", "Contour libre"], ["path", "Chemin"]];
+const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"]];
 const SK_HINTS = {
   select: "Clique sur une forme pour la choisir, puis glisse-la ou modifie ses cotes à droite. Molette : zoom. Clic droit ou glisser dans le vide : déplacer la vue.",
   rect: "Glisse d’un coin à l’autre (ou clique deux fois). Maj : sans accroche.",
@@ -806,6 +880,8 @@ const SK_HINTS = {
   slot: "Clique au premier centre, puis au second. Règle la largeur à droite.",
   polygon: "Clique au centre, puis sur un sommet.",
   poly: "Clique chaque point. Pour fermer : reclique sur le premier point, double-clique, ou Entrée. Ensuite, tire le rond au milieu d’un côté pour le courber en arc.",
+  ellipse: "Clique au centre, puis au coin du rectangle qui l’entoure.",
+  spline: "Courbe lisse qui passe par chaque point cliqué. Reclique sur le premier point pour la fermer, ou double-clique (Entrée) pour la laisser ouverte, par exemple pour un balayage.",
   path: "Chemin ouvert pour un balayage : clique chaque point, puis double-clique ou Entrée pour finir.",
 };
 let sketcher;
@@ -860,7 +936,7 @@ function renderSketchTools() {
     h("button", { class: "tbtn on", onclick: () => closeSketch() }, h("span", { html: ICONS.done }), "Terminer"));
   $("#skHint").textContent = fr(SK_HINTS[sketcher.tool] || "");
 }
-const ENT_LABELS = { rect: "Rectangle", circle: "Cercle", polygon: "Polygone", slot: "Rainure", poly: "Contour libre", path: "Chemin", point: "Point" };
+const ENT_LABELS = { rect: "Rectangle", circle: "Cercle", polygon: "Polygone", slot: "Rainure", poly: "Contour libre", path: "Chemin", point: "Point", ellipse: "Ellipse", spline: "Courbe" };
 function renderSketchProps(P) {
   const f = feat(st.editSketch); if (!f) return;
   P.append(h("div", { class: "head" }, h("span", { class: "ic", html: ICONS.sketch }), h("input", { value: f.name, onchange: (e) => mutate(() => { f.name = e.target.value.trim() || f.name; }) })));
@@ -876,14 +952,16 @@ function renderSketchProps(P) {
     if (e.type === "circle") P.append(F("Diamètre", "d"), F("Centre X", "cx"), F("Centre Y", "cy"));
     if (e.type === "polygon") P.append(F("Nombre de côtés", "n", ""), F("Diamètre (cercle extérieur)", "d"), F("Centre X", "cx"), F("Centre Y", "cy"), F("Rotation", "a", "°", { step: 15 }));
     if (e.type === "slot") P.append(F("Largeur", "w"), F("Centre 1 : X", "x1"), F("Centre 1 : Y", "y1"), F("Centre 2 : X", "x2"), F("Centre 2 : Y", "y2"));
-    if (e.type === "poly" || e.type === "path") {
+    if (e.type === "ellipse") P.append(F("Demi-axe a", "rx"), F("Demi-axe b", "ry"), F("Centre X", "cx"), F("Centre Y", "cy"), F("Rotation", "a", "°", { step: 15 }));
+    if (e.type === "spline") P.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!e.closed, onchange: (ev) => { mutate(() => { e.closed = ev.target.checked; }); renderProps(); } }), "Courbe fermée"));
+    if (e.type === "poly" || e.type === "path" || e.type === "spline") {
       if (e.type === "poly") P.append(F("Congé des angles", "r"));
-      P.append(h("h2", {}, "Points (X, Y, flèche de l’arc)"));
+      P.append(h("h2", {}, e.type === "spline" ? "Points de passage (X, Y)" : "Points (X, Y, flèche de l’arc)"));
       const box = h("div", { class: "pts" });
       e.pts.forEach((p, i) => {
         const mk = (j) => h("input", { value: p[j], "aria-label": j ? "Y" : "X", oninput: (ev) => mutate(() => { p[j] = ev.target.value; }, true), onchange: () => pushHistory() });
-        const mk3 = h("input", { value: p[2] ?? "", placeholder: "0", title: "Flèche : courbe le côté qui part de ce point (0 = droit)", oninput: (ev) => mutate(() => { p[2] = ev.target.value; }, true), onchange: () => pushHistory() });
-        box.append(h("div", { class: "pt pt3" }, String(i + 1), mk(0), mk(1), mk3, h("button", { class: "x", title: "Retirer ce point", onclick: () => { if (e.pts.length <= (e.type === "path" ? 2 : 3)) { toast("Il n’y a pas assez de points."); return; } mutate(() => { e.pts.splice(i, 1); f.constraints = (f.constraints || []).filter((c) => (c.refs || []).every((r) => r.e !== e.id)); }); renderProps(); } }, "✕")));
+        const mk3 = e.type === "spline" ? h("span") : h("input", { value: p[2] ?? "", placeholder: "0", title: "Flèche : courbe le côté qui part de ce point (0 = droit)", oninput: (ev) => mutate(() => { p[2] = ev.target.value; }, true), onchange: () => pushHistory() });
+        box.append(h("div", { class: "pt pt3" }, String(i + 1), mk(0), mk(1), mk3, h("button", { class: "x", title: "Retirer ce point", onclick: () => { if (e.pts.length <= (e.type === "path" || (e.type === "spline" && !e.closed) ? 2 : 3)) { toast("Il n’y a pas assez de points."); return; } mutate(() => { e.pts.splice(i, 1); f.constraints = (f.constraints || []).filter((c) => (c.refs || []).every((r) => r.e !== e.id)); }); renderProps(); } }, "✕")));
       });
       P.append(box);
     }
@@ -891,6 +969,14 @@ function renderSketchProps(P) {
     P.append(cons, h("div", { class: "btnrow" },
       h("button", { class: "btn", onclick: () => { const c = JSON.parse(JSON.stringify(e)); c.id = newId("e"); const off = (k) => { const n = Number(String(c[k]).replace(",", ".")); if (isFinite(n)) c[k] = String(n + 5); }; ["cx", "x1", "x2"].forEach(off); ["cy", "y1", "y2"].forEach(off); if (c.pts) c.pts = c.pts.map((q) => q.map((v, k) => { const n = Number(v); return k < 2 && isFinite(n) ? String(n + 5) : v; })); mutate(() => f.entities.push(c)); st.skSel = c.id; sketcher.sel = c.id; renderProps(); sketcher.render(); } }, "Dupliquer"),
       h("button", { class: "btn danger", onclick: () => sketcher.deleteSel() }, "Supprimer")));
+    P.append(h("h2", {}, "Copier autrement"), h("div", { class: "btnrow" },
+      h("button", { class: "btn", title: "Copie symétrique par rapport à l’axe vertical (Y)", onclick: () => mirrorEntity(f, e, 0) }, "Symétrie gauche-droite"),
+      h("button", { class: "btn", title: "Copie symétrique par rapport à l’axe horizontal (X)", onclick: () => mirrorEntity(f, e, 1) }, "Symétrie haut-bas")));
+    if (e.type !== "point") {
+      const dist = h("input", { type: "text", value: "2", inputmode: "decimal", style: "width:70px" });
+      P.append(h("div", { class: "field" }, h("label", {}, "Décalage (positif : vers l’extérieur)"), h("div", { class: "in" }, dist, h("span", { class: "unit" }, "mm"),
+        h("button", { class: "btn", onclick: () => offsetEntity(f, e, dist.value) }, "Créer le décalage"))));
+    }
   }
   P.append(...constraintPanel(f));
   P.append(h("h2", {}, `Formes (${ents.length})`));
@@ -899,6 +985,54 @@ function renderSketchProps(P) {
   if (!ents.length) list.append(h("div", { class: "param-empty" }, "Choisis un outil à gauche et dessine. Les formes placées à l’intérieur d’une autre deviennent des trous."));
   P.append(list);
   P.append(h("div", { class: "btnrow" }, h("button", { class: "btn primary", onclick: () => closeSketch() }, "Terminer l’esquisse")));
+}
+
+// ---------- Symétrie et décalage d'esquisse ----------
+const isNumStr = (v) => v !== undefined && v !== "" && isFinite(Number(String(v).replace(",", ".")));
+const toN = (v) => Number(String(v).replace(",", "."));
+const r6 = (v) => String(Math.round(v * 1e6) / 1e6);
+const negE = (v) => (v === undefined || v === "" ? v : isNumStr(v) ? r6(-toN(v)) : `-(${v})`);
+const addE = (v, d) => (isNumStr(v) && isNumStr(d) ? r6(toN(v) + toN(d)) : `(${v || 0})+(${d})`);
+const mulE = (v, k) => (isNumStr(v) ? r6(toN(v) * k) : `(${v})*${r6(k)}`);
+function addSketchEntity(f, c) {
+  c.id = newId("e");
+  mutate(() => f.entities.push(c)); st.skSel = c.id; sketcher.sel = c.id; renderProps(); sketcher.render();
+}
+function mirrorEntity(f, e, axis) {
+  const c = JSON.parse(JSON.stringify(e)); const X = axis === 0 ? "x" : "y";
+  if ("c" + X in c) c["c" + X] = negE(c["c" + X]);
+  if (c.type === "slot") { c[X + "1"] = negE(c[X + "1"]); c[X + "2"] = negE(c[X + "2"]); }
+  if (c.type === "rect" || c.type === "ellipse") c.a = negE(c.a || "0");
+  if (c.type === "polygon") c.a = axis === 0 ? addE("180", negE(c.a || "0")) : negE(c.a || "0");
+  if (c.pts) c.pts = c.pts.map((q) => { const r = [...q]; r[axis] = negE(q[axis]); if (r[2] !== undefined && r[2] !== "") r[2] = negE(r[2]); return r; });
+  addSketchEntity(f, c);
+}
+function offsetEntity(f, e, dRaw) {
+  const d = String(dRaw).replace(",", ".").trim(); if (!d) return;
+  const c = JSON.parse(JSON.stringify(e)); delete c.construction;
+  const vars = varsMap(doc.params); let dv; try { dv = evalExpr(d, vars); } catch { toast("Décalage invalide."); return; }
+  if (c.type === "circle") c.d = addE(c.d, mulE(d, 2));
+  else if (c.type === "slot") c.w = addE(c.w, mulE(d, 2));
+  else if (c.type === "rect") { c.w = addE(c.w, mulE(d, 2)); c.h = addE(c.h, mulE(d, 2)); const r = evalExpr(String(c.r || 0), vars); c.r = r + dv > 0 ? addE(c.r || "0", d) : "0"; }
+  else if (c.type === "ellipse") { c.rx = addE(c.rx, d); c.ry = addE(c.ry, d); }
+  else if (c.type === "polygon") c.d = addE(c.d, mulE(d, 2 / Math.cos(Math.PI / evalExpr(String(c.n), vars))));
+  else if (c.pts) {
+    const o = evalEntity(e, vars); const P = o.pts; const n = P.length;
+    const closed = c.type === "poly" || (c.type === "spline" && c.closed);
+    if (P.some((q) => q[2])) { toast("Le décalage ne gère pas encore les côtés courbés : redresse-les ou dessine une courbe."); return; }
+    let area = 0; for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; area += a[0] * b[1] - b[0] * a[1]; }
+    const sg = closed ? (area > 0 ? 1 : -1) : -1; // fermé : vers l'extérieur ; ouvert : vers la droite
+    const nrm = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1; return [dy / L * sg, -dx / L * sg]; };
+    c.pts = P.map((q, i) => {
+      const prev = closed ? P[(i - 1 + n) % n] : P[i - 1], next = closed ? P[(i + 1) % n] : P[i + 1];
+      const n1 = prev ? nrm(prev, q) : null, n2 = next ? nrm(q, next) : null;
+      let m = n1 && n2 ? [n1[0] + n2[0], n1[1] + n2[1]] : (n1 || n2); const k = n1 && n2 ? 1 + n1[0] * n2[0] + n1[1] * n2[1] : 1;
+      const s = n1 && n2 ? (k > 0.05 ? 1 / k : 20) : 1; m = [m[0] * s, m[1] * s];
+      return [r6(q[0] + m[0] * dv), r6(q[1] + m[1] * dv)];
+    });
+    if (f.constraints?.length) { /* les contraintes ne sont pas copiées */ }
+  }
+  addSketchEntity(f, c);
 }
 
 // ---------- Esquisses en 3D ----------
@@ -913,7 +1047,7 @@ function renderOverlay() {
     if (!active && used.has(f.id)) continue;
     try {
       const pl = resolvePlane(f.plane, vars);
-      const loops = (f.entities || []).map((e) => { let o = outline(evalEntity(e, vars)); if (e.type === "path") o = o.concat(o.slice(1, -1).reverse()); return o.map((p) => toWorld(pl, p[0], p[1])); });
+      const loops = (f.entities || []).map((e) => { let o = outline(evalEntity(e, vars)); if (e.type === "path" || (e.type === "spline" && !e.closed)) o = o.concat(o.slice(1, -1).reverse()); return o.map((p) => toWorld(pl, p[0], p[1])); });
       list.push({ loops, active });
     } catch { /* esquisse invalide */ }
   }
@@ -1074,6 +1208,7 @@ function help() {
     <h3>2. Le volume</h3><p><b>Extrusion</b> donne de l’épaisseur, <b>Enlèvement</b> creuse, <b>Révolution</b> fait tourner le profil autour d’un axe (pour les pièces rondes).</p>
     <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
     <h3>Formes avancées</h3><p><b>Plan</b> crée un plan décalé ou incliné pour y dessiner. <b>Lissage</b> relie plusieurs esquisses posées sur des plans différents. <b>Balayage</b> fait glisser un profil le long d’un <b>Chemin</b> (outil de l’esquisse). <b>Dépouille</b> incline des faces. <b>Répétition</b> et <b>Symétrie</b> copient toute la pièce ou seulement les fonctions choisies, en ligne, en grille ou en cercle. Dans un contour libre, tire le rond au milieu d’un côté pour le courber.</p>
+    <h3>Plus de fonctions</h3><p>Dans l’esquisse : <b>Ellipse</b>, <b>Courbe</b> (lisse, passe par tes points), et pour une forme choisie : <b>Symétrie</b> et <b>Décalage</b>. Dans la pièce : <b>Ressort</b>, <b>Filetage</b> (clique sur un axe ou un trou, le pas ISO est proposé), <b>Nervure</b> (un simple trait d’esquisse entre deux parois) et, dans une extrusion, <b>Jusqu’à : une face</b>. <b>Autres formats</b> : 3MF, OBJ, et DXF d’une esquisse pour la découpe laser.</p>
     <h3>Outils</h3><p><b>Mesurer</b> : clique deux points. <b>Coupe</b> : regarde l’intérieur. <b>Mise en plan</b> : le plan 2D coté de ta pièce, à imprimer ou en PDF. <b>Importer</b> : ajoute une pièce STEP ou STL. Coche « Centre de gravité » en bas pour l’afficher.</p>
     <h3>Assemblages</h3><p><b>Nouveau → Assemblage</b>, puis <b>Insérer une pièce</b> : tes pièces sont rangées automatiquement dans <b>Mes pièces</b>. La première pièce est fixe. <b>Coïncidence</b> plaque deux faces planes, <b>Concentrique</b> aligne un axe dans un trou, <b>Distance</b> écarte deux faces. Ensuite : <b>Interférences</b> (les pièces se chevauchent-elles ?), <b>Vue éclatée</b>, <b>Nomenclature</b> (liste des pièces avec masses, exportable en tableur) et export STEP de tout l’assemblage.</p>
     <h3>4. L’historique</h3><p>À gauche, chaque étape reste modifiable : clique dessus et change ses valeurs, la pièce se recalcule. Glisse la ligne bleue « Fin de la pièce » vers le haut pour revenir en arrière dans la construction.</p>
@@ -1115,6 +1250,26 @@ function newDialog() {
       h("button", { class: "btn", onclick: () => go(emptyDoc()) }, h("b", {}, "Pièce"), " : dessiner et modeler une pièce"),
       h("button", { class: "btn", onclick: () => go(emptyAsm()) }, h("b", {}, "Assemblage"), " : réunir plusieurs pièces et les positionner"))),
   h("div", { class: "df" }, h("button", { class: "btn", onclick: () => dlg.close() }, "Annuler")));
+  dlg.showModal();
+}
+function moreFormats() {
+  const dlg = $("#dlg"); dlg.innerHTML = "";
+  const go = (k) => { dlg.close(); doExport(k); };
+  const sks = isAsm() ? [] : doc.features.filter((f) => f.type === "sketch" && (f.entities || []).length);
+  let skSel = st.editSketch || (feat(st.sel)?.type === "sketch" ? st.sel : sks.at(-1)?.id);
+  const dxf = () => {
+    const f = feat(skSel); if (!f) return;
+    try { download(sketchDXF(f.entities, varsMap(doc.params)), `${safeName()} - ${f.name}.dxf`); dlg.close(); toast("Esquisse enregistrée en DXF (en millimètres)."); } catch (x) { toast("Export DXF impossible : " + x.message); }
+  };
+  dlg.append(h("div", { class: "dh" }, "Autres formats"), h("div", { class: "db" },
+    h("div", { class: "planes" },
+      h("button", { class: "btn", onclick: () => go("3mf") }, h("b", {}, "3MF"), " : pour l’impression 3D (Bambu Studio, PrusaSlicer, Cura), plus précis que le STL"),
+      h("button", { class: "btn", onclick: () => go("obj") }, h("b", {}, "OBJ"), " : pour Blender, les moteurs de jeu et le rendu")),
+    sks.length ? h("div", {},
+      h("h3", {}, "Esquisse en DXF (découpe laser, CNC, logiciels 2D)"),
+      h("div", { class: "field" }, h("label", {}, "Esquisse"), h("select", { onchange: (e) => { skSel = e.target.value; } }, sks.map((f) => h("option", { value: f.id, selected: f.id === skSel }, f.name)))),
+      h("div", { class: "btnrow" }, h("button", { class: "btn", onclick: dxf }, "Enregistrer le DXF"))) : null),
+  h("div", { class: "df" }, h("button", { class: "btn", onclick: () => dlg.close() }, "Fermer")));
   dlg.showModal();
 }
 function libraryDialog() {
@@ -1165,6 +1320,7 @@ document.querySelector(".file").addEventListener("click", (e) => {
   if (a === "step") doExport("step");
   if (a === "help") help();
   if (a === "lib") libraryDialog();
+  if (a === "more") moreFormats();
   if (a === "install") installApp();
 });
 $(".params-box").addEventListener("click", (e) => { if (e.target.closest("[data-act=addParam]")) addParam(); });
@@ -1185,7 +1341,7 @@ document.addEventListener("keydown", (e) => {
     if (viewer.pickMode) { viewer.setPick(null); banner(null); return; }
     select(null); return;
   }
-  if (e.key === "Enter" && st.editSketch && (sketcher.draft?.type === "poly" || sketcher.draft?.type === "path")) { sketcher.finishPoly(); return; }
+  if (e.key === "Enter" && st.editSketch && ["poly", "path", "spline"].includes(sketcher.draft?.type)) { sketcher.finishPoly(); return; }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (st.editSketch) { sketcher.deleteSel(); return; }
     if (isAsm()) { asmUI.deleteSelected(); return; }
