@@ -171,7 +171,7 @@ export function createExtras(ctx) {
         h("div", { class: "btnrow", style: "padding:0 0 10px" }, label, h("button", { class: "btn primary", onclick: () => { if (saveVersion(label.value.trim())) { toast("Version enregistrée."); draw(); } } }, "Enregistrer cette version")),
         list.length ? h("table", { class: "bom" }, list.map((v, i) => h("tr", {},
           h("td", {}, new Date(v.date).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" })), h("td", {}, v.label || "—"), h("td", {}, `${(v.doc.features || v.doc.components || []).length} étape(s)`),
-          h("td", {}, h("button", { class: "btn", onclick: () => { saveVersion("Avant retour en arrière"); dlg.close(); ctx.loadDoc(v.doc); toast("Version restaurée. L’état d’avant est gardé dans les versions."); } }, "Revenir")),
+          h("td", {}, h("button", { class: "btn", onclick: () => { saveVersion("Avant retour en arrière"); dlg.close(); ctx.replaceDoc(v.doc); toast("Version restaurée. L’état d’avant est gardé dans les versions."); } }, "Revenir")),
           h("td", {}, h("button", { class: "btn danger", onclick: () => { list.splice(i, 1); all[k] = list; try { localStorage.setItem(VKEY, JSON.stringify(all)); } catch { /* */ } draw(); } }, "✕")))))
           : h("p", {}, "Aucune version pour l’instant. Enregistre une version avant un gros changement : tu pourras y revenir à tout moment.")),
       h("div", { class: "df" }, h("button", { class: "btn", onclick: () => dlg.close() }, "Fermer")));

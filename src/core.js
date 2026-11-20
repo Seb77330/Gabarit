@@ -315,6 +315,18 @@ function patternTransforms(f, vars) {
 
 function decodeB64(b64) { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
 
+// Étire un STL binaire (ou texte) selon X, Y, Z.
+function stretchStl(u8, k) {
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const n = u8.length >= 84 ? dv.getUint32(80, true) : 0;
+  if (u8.length === 84 + n * 50) {
+    const out = new Uint8Array(u8); const o = new DataView(out.buffer);
+    for (let i = 0; i < n; i++) for (let v = 0; v < 3; v++) for (let c = 0; c < 3; c++) { const at = 84 + i * 50 + 12 + v * 12 + c * 4; o.setFloat32(at, dv.getFloat32(at, true) * k[c], true); }
+    return out;
+  }
+  const txt = new TextDecoder().decode(u8).replace(/vertex\s+(\S+)\s+(\S+)\s+(\S+)/g, (_, x, y, z) => `vertex ${+x * k[0]} ${+y * k[1]} ${+z * k[2]}`);
+  return new TextEncoder().encode(txt);
+}
 // STL → solide : on recoud les triangles (l'import de replicad échoue avec ce noyau),
 // on ferme chaque coque en solide puis on fusionne les faces coplanaires.
 let stlN = 0;
@@ -485,10 +497,17 @@ export async function build(doc, opts = {}) {
         }
       } else if (f.type === "import") {
         if (!f.data) throw new Error("Aucun fichier importé");
-        const key = f.id + ":" + f.data.length;
+        // étirement dans une seule direction (X, Y ou Z) : appliqué au maillage avant conversion
+        const sxyz = [f.sx, f.sy, f.sz].map((v) => (v === undefined || v === "" ? 1 : evalExpr(v, vars)));
+        if (sxyz.some((v) => !(v > 0))) throw new Error("Les tailles doivent être plus grandes que 0");
+        const stretch = sxyz.some((v) => Math.abs(v - 1) > 1e-9);
+        if (stretch && f.format !== "stl") throw new Error("Pour un fichier STEP, la taille ne peut changer que de façon égale dans les 3 directions (Échelle)");
+        const key = f.id + ":" + f.data.length + ":" + sxyz.join(",");
         let imp = importCache.get(f.id);
         if (!imp || imp.key !== key) {
-          const blob = new Blob([decodeB64(f.data)]);
+          let bytes = decodeB64(f.data);
+          if (stretch) bytes = stretchStl(bytes, sxyz);
+          const blob = new Blob([bytes]);
           const s = f.format === "stl" ? await stlSolid(blob) : await R.importSTEP(blob);
           if (!s) throw new Error("Fichier illisible");
           imp = { key, shape: s }; importCache.set(f.id, imp);
@@ -496,6 +515,14 @@ export async function build(doc, opts = {}) {
         let s = imp.shape.clone();
         const sc = f.scale ? evalExpr(f.scale, vars) : 1;
         if (sc !== 1) s = s.scale(sc, [0, 0, 0]);
+        const rot = [f.rx, f.ry, f.rz].map((v) => (v ? evalExpr(v, vars) : 0));
+        if (rot.some(Boolean)) {
+          const [lo, hi] = s.boundingBox.bounds; const c = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
+          if (rot[0]) s = s.rotate(rot[0], c, [1, 0, 0]);
+          if (rot[1]) s = s.rotate(rot[1], c, [0, 1, 0]);
+          if (rot[2]) s = s.rotate(rot[2], c, [0, 0, 1]);
+          const lo2 = s.boundingBox.bounds[0]; if (Math.abs(lo2[2] - lo[2]) > 1e-9) s = s.translate([0, 0, lo[2] - lo2[2]]); // reste posé au même niveau
+        }
         const t = [f.tx, f.ty, f.tz].map((v) => (v ? evalExpr(v, vars) : 0));
         if (t.some(Boolean)) s = s.translate(t);
         apply(s, f.mode || "add", f.id);
