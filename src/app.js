@@ -1,6 +1,8 @@
 // Gabarit : application principale (interface, historique, échanges avec le noyau 3D).
 import { Viewer } from "./viewer.js";
-import { Sketcher, newId } from "./sketcher.js";
+import { Sketcher, newId, circle3 } from "./sketcher.js";
+import { read3mf, toStl, simplify, readStl } from "./mesh3mf.js";
+const MAX_TRIS = 20000;
 import { ICONS } from "./icons.js";
 import { evalExpr, varsMap } from "./expr.js";
 import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, toWorld, STD_PLANES, cross, dot, norm, scale } from "./geo.js";
@@ -112,7 +114,8 @@ function pushHistory() {
 }
 let libTimer;
 function save() {
-  try { localStorage.setItem(STORE, JSON.stringify(doc)); } catch { /* stockage indisponible */ }
+  try { localStorage.setItem(STORE, JSON.stringify(doc)); }
+  catch { if (!st.saveWarned) { st.saveWarned = true; toast("Pièce trop lourde pour l’enregistrement automatique : pense à faire « Enregistrer » (Ctrl+S)."); } }
   if (!isAsm()) { clearTimeout(libTimer); libTimer = setTimeout(() => addToLibrary(doc), 800); }
 }
 function undo() { if (hidx > 0) { hidx--; restore(); } }
@@ -905,12 +908,11 @@ function addConstraint(type, refs) {
   if (!ok) toast("Cette contrainte entre en conflit avec les autres. Annule-la (Ctrl+Z) ou retire une autre contrainte.");
   renderProps(); sketcher.render();
 }
-function constraintPanel(f) {
-  const out = [];
-  const subs = sketcher.subs || [];
+// Contraintes possibles pour la sélection en cours : [type, références, libellé].
+function constraintChoices(subs) {
   const segs = subs.filter((r) => r.kind === "seg"), pts = subs.filter((r) => r.kind === "pt"), circs = subs.filter((r) => r.kind === "circ");
-  const btns = [];
-  const B = (type, refs, label) => btns.push(h("button", { class: "btn", title: C_LABELS[type], onclick: () => addConstraint(type, refs) }, h("b", { style: "color:#7a3fd1" }, C_GLYPH[type] + " "), label || C_LABELS[type]));
+  const ch = [];
+  const B = (type, refs, label) => ch.push([type, refs, label || C_LABELS[type]]);
   if (segs.length === 1 && !pts.length && !circs.length) { B("horizontal", segs); B("vertical", segs); B("length", segs, "Cote de longueur"); }
   if (segs.length === 2 && !pts.length) {
     B("parallel", segs); B("perpendicular", segs); B("equal", segs, "Même longueur");
@@ -920,6 +922,30 @@ function constraintPanel(f) {
   if (circs.length === 2 && subs.length === 2) { B("equal", circs, "Même diamètre"); B("coincident", circs.map((c) => ({ e: c.e, k: "c", kind: "pt" })), "Concentriques"); }
   if (pts.length === 1 && subs.length === 1 && pts[0].e !== "origin") { B("fix", pts); B("onH", pts); B("onV", pts); B("coincident", [pts[0], { e: "origin", kind: "pt" }], "Sur l’origine"); }
   if (pts.length === 2 && subs.length === 2) { B("coincident", pts); B("distance", pts, "Cote de distance"); B("hAlign", pts); B("vAlign", pts); B("symV", pts); B("symH", pts); }
+  if (pts.length === 1 && segs.length === 1 && subs.length === 2) { B("midpoint", [pts[0], segs[0]], "Au milieu du côté"); B("onLine", [pts[0], segs[0]], "Sur le côté"); }
+  if (pts.length === 1 && circs.length === 1 && subs.length === 2) { B("coincident", [pts[0], { e: circs[0].e, k: "c", kind: "pt" }], "Au centre du cercle"); B("onCircle", [pts[0], circs[0]], "Sur le cercle"); }
+  if (segs.length === 1 && circs.length === 1 && subs.length === 2) B("tangent", [segs[0], circs[0]], "Tangent");
+  return ch;
+}
+// Petite fenêtre près du pointeur : les contraintes possibles pour ce qui est choisi (Ctrl+clic pour en ajouter).
+function relBox(e, show) {
+  $("#relBox")?.remove();
+  if (!show || !e || !st.editSketch || sketcher.tool !== "select") return;
+  const ch = constraintChoices(sketcher.subs || []).filter(([t]) => C_LABELS[t]); if (!ch.length) return;
+  const sk = $("#sketch"), host = sk.getBoundingClientRect();
+  const box = h("div", { id: "relBox", class: "rel-box", onpointerdown: (ev) => ev.stopPropagation() },
+    h("div", { class: "t" }, sketcher.subs.length > 1 ? "Relier ces éléments" : "Contraindre"),
+    ...ch.map(([t, refs, l]) => h("button", { onclick: () => { addConstraint(t, refs); $("#relBox")?.remove(); } }, h("b", {}, C_GLYPH[t]), fr(l))),
+    sketcher.subs.length < 2 ? h("div", { class: "tip" }, fr("Ctrl+clic sur un autre élément pour les relier.")) : null);
+  sk.append(box);
+  const bw = box.offsetWidth, bh = box.offsetHeight;
+  box.style.left = Math.max(4, Math.min(host.width - bw - 4, e.clientX - host.left + 16)) + "px";
+  box.style.top = Math.max(4, Math.min(host.height - bh - 30, e.clientY - host.top + 16)) + "px";
+}
+function constraintPanel(f) {
+  const out = [];
+  const subs = sketcher.subs || [];
+  const btns = constraintChoices(subs).filter(([t]) => C_LABELS[t]).map(([type, refs, label]) => h("button", { class: "btn", title: C_LABELS[type], onclick: () => addConstraint(type, refs) }, h("b", { style: "color:#7a3fd1" }, C_GLYPH[type] + " "), label));
   out.push(h("h2", {}, "Contraintes"));
   const stt = sketcher.solveState;
   const nC = (f.constraints || []).length;
@@ -941,10 +967,21 @@ function constraintPanel(f) {
 
 // ---------- Mode esquisse ----------
 const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"], ["convert", "Reprendre"]];
+// Façons de tracer un rectangle ou un cercle (le bouton reprend la dernière choisie).
+const SK_FAM = {
+  rect: [["rect", "Coin à coin"], ["rectc", "Depuis le centre"], ["rect3", "3 points (incliné)"]],
+  circle: [["circle", "Centre et bord"], ["circle3", "3 points"]],
+};
+const famOf = (t) => Object.keys(SK_FAM).find((k) => SK_FAM[k].some(([x]) => x === t));
+const skMode = { rect: "rect", circle: "circle" };
+const SK_ALL = SK_TOOLS.flatMap(([k, l]) => SK_FAM[k] ? SK_FAM[k].map(([v, vl]) => [v, `${l} : ${vl.toLowerCase()}`]) : [[k, l]]);
 const SK_HINTS = {
-  select: "Clique sur une forme pour la choisir, puis glisse-la ou modifie ses cotes à droite. Molette : zoom. Clic droit ou glisser dans le vide : déplacer la vue.",
+  rectc: "Clique au centre, puis à un coin.",
+  rect3: "Clique les deux bouts d’un côté, puis un troisième point pour la largeur.",
+  circle3: "Clique trois points par lesquels le cercle doit passer.",
+  select: "Clique sur une forme pour la choisir, puis Ctrl+clic sur une autre pour voir les contraintes possibles. Clic dans le vide ou Échap : tout désélectionner. Clic droit maintenu : déplacer la vue.",
   rect: "Glisse d’un coin à l’autre (ou clique deux fois). Maj : sans accroche.",
-  circle: "Clique au centre, puis au bord.",
+  circle: "Clique au centre, puis au bord. Les centres des trous de la pièce (petites croix) servent d’accroche.",
   slot: "Clique au premier centre, puis au second. Règle la largeur à droite.",
   polygon: "Clique au centre, puis sur un sommet.",
   poly: "Clique chaque point. Pour fermer : reclique sur le premier point, double-clique, ou Entrée. Ensuite, tire le rond au milieu d’un côté pour le courber en arc.",
@@ -983,11 +1020,21 @@ function closeSketch(silent) {
   else st.sel = id;
   renderAll(); requestBuild(0);
 }
+// Centre d'une polyligne posée sur un cercle (au moins 5 points, écart < 1 %), sinon null.
+function arcCenter(P) {
+  if (P.length < 5) return null;
+  const a = P[0], b = P[Math.floor(P.length / 2)], c = P.at(-1);
+  const closed = Math.hypot(a[0] - c[0], a[1] - c[1]) < 1e-6;
+  const k = circle3(a, closed ? P[Math.floor(P.length / 3)] : b, closed ? P[Math.floor(2 * P.length / 3)] : c);
+  if (!k || k[2] < 1e-3) return null;
+  for (const p of P) if (Math.abs(Math.hypot(p[0] - k[0], p[1] - k[1]) - k[2]) > k[2] * 0.01 + 1e-4) return null;
+  return [k[0], k[1]];
+}
 function updateSketchRefs() {
   const f = feat(st.editSketch); if (!f || !sketcher) return;
   let pl; try { pl = resolvePlane(f.plane, varsMap(doc.params)); } catch { return; }
   st.skPlane = pl;
-  const lines = [], pts = [], edges = [];
+  const lines = [], pts = [], edges = [], centers = [];
   const m = st.mesh;
   if (m) {
     const L = m.lines; const tol = Math.max(0.01, viewer.size / 2000);
@@ -1010,9 +1057,11 @@ function updateSketchRefs() {
       const clean = poly.filter((p, i) => i === 0 || Math.hypot(p[0] - poly[i - 1][0], p[1] - poly[i - 1][1]) > 1e-6);
       if (clean.length >= 2) edges.push({ pts: clean, flat });
       addPt(proj(g.start * 3)); addPt(last);
+      // arête circulaire (cercle entier ou arc) à plat : son centre sert d'accroche
+      const ctr = flat && arcCenter(clean); if (ctr) { const k = [round(ctr[0], 0.001), round(ctr[1], 0.001)]; if (!centers.some((c) => Math.hypot(c[0] - k[0], c[1] - k[1]) < 1e-3)) { centers.push(k); addPt(k); } }
     }
   }
-  sketcher.refs = { lines, pts, edges };
+  sketcher.refs = { lines, pts, edges, centers };
   sketcher.render();
 }
 // Vue 3D calée sous l'esquisse : la pièce reste visible pendant qu'on dessine.
@@ -1027,7 +1076,18 @@ function syncSketchView() {
 }
 function renderSketchTools() {
   const box = $("#skTools"); box.innerHTML = "";
-  for (const [k, label] of SK_TOOLS) box.append(h("button", { class: "tbtn" + (sketcher.tool === k ? " on" : ""), onclick: () => sketcher.setTool(k) }, h("span", { html: ICONS[k] }), label));
+  const cur = sketcher.tool, curFam = famOf(cur);
+  for (const [k, label] of SK_TOOLS) {
+    const fam = SK_FAM[k] ? k : null, on = fam ? curFam === fam : cur === k;
+    const go = fam ? skMode[fam] : k;
+    box.append(h("button", { class: "tbtn" + (on ? " on" : ""), "data-sk": k, title: on && k !== "select" ? "Reclique (ou Échap) pour arrêter de tracer" : label, onclick: () => sketcher.setTool(on && k !== "select" ? "select" : go) }, h("span", { html: ICONS[fam ? go : k] }), label));
+  }
+  $("#skMethod")?.remove();
+  if (curFam) {
+    skMode[curFam] = cur;
+    $("#sketch").append(h("div", { id: "skMethod", class: "sk-method" }, ...SK_FAM[curFam].map(([v, l]) =>
+      h("button", { class: v === cur ? "on" : "", "data-m": v, onclick: () => sketcher.setTool(v) }, h("span", { html: ICONS[v] }), l))));
+  }
   box.append(h("hr"), h("label", {}, "Pas de grille"),
     h("select", { onchange: (e) => { sketcher.snapStep = Number(e.target.value); sketcher.render(); } }, [0.1, 0.5, 1, 2, 5, 10].map((v) => h("option", { value: v, selected: v === sketcher.snapStep }, nf(v) + " mm"))),
     h("hr"), h("button", { class: "tbtn", onclick: () => sketcher.fitView() }, h("span", { html: ICONS.fit }), "Recadrer"),
@@ -1211,17 +1271,43 @@ function toggleSection() {
 
 // ---------- Import STEP / STL ----------
 function importFile() {
-  const inp = h("input", { type: "file", accept: ".step,.stp,.stl", hidden: true });
-  inp.addEventListener("change", async () => {
-    const file = inp.files[0]; if (!file) return;
-    if (file.size > 25e6) { toast("Fichier trop gros (25 Mo au maximum)."); return; }
-    const buf = new Uint8Array(await file.arrayBuffer());
-    let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-    const format = /\.stl$/i.test(file.name) ? "stl" : "step";
-    insertFeature({ id: newId("f"), type: "import", name: file.name.replace(/\.[^.]+$/, ""), file: file.name, format, data: btoa(bin), mode: "add", scale: "1", tx: "0", ty: "0", tz: "0" });
-    st.firstFit = true;
-  });
+  const inp = h("input", { type: "file", accept: ".3mf,.stl,.step,.stp", hidden: true });
+  inp.addEventListener("change", () => { const file = inp.files[0]; if (file) importBlob(file); });
   document.body.append(inp); inp.click(); setTimeout(() => inp.remove(), 60000);
+}
+const b64 = (u8) => { let bin = ""; for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(bin); };
+const MESH_EXT = /\.(3mf|stl|step|stp)$/i;
+// Importe un fichier 3MF (Bambu Studio, Orca, Prusa…), STL ou STEP dans la pièce ouverte.
+async function importBlob(file) {
+  if (isAsm()) { toast("Ouvre une pièce pour importer ce fichier (ou insère-le comme composant)."); return; }
+  if (file.size > 60e6) { toast("Fichier trop gros (60 Mo au maximum)."); return; }
+  const base = file.name.replace(/\.[^.]+$/, "");
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (/\.(3mf|stl)$/i.test(file.name)) {
+    let objs, before = 0;
+    try {
+      showBusy(true, "Lecture du fichier…");
+      await new Promise((r) => setTimeout(r, 30));
+      const raw = /\.3mf$/i.test(file.name) ? await read3mf(buf) : [{ name: base, tris: readStl(buf) }];
+      before = raw.reduce((n, o) => n + o.tris.length / 9, 0);
+      // au-delà de MAX_TRIS, on allège pour que les modifications restent rapides
+      if (before > MAX_TRIS) { showBusy(true, "Allègement du maillage…"); await new Promise((r) => setTimeout(r, 30)); for (const o of raw) o.tris = simplify(o.tris, Math.max(500, Math.round(MAX_TRIS * (o.tris.length / 9) / before))); }
+      objs = toStl(raw);
+    } catch (e) { showBusy(false); toast(e.message || "Ce fichier est illisible."); return; }
+    showBusy(false);
+    const total = objs.reduce((n, o) => n + o.count, 0);
+    const feats = objs.map((o) => ({ id: newId("f"), type: "import", name: objs.length > 1 ? o.name : base, file: file.name, format: "stl", data: b64(o.stl), mode: "add", scale: "1", tx: "0", ty: "0", tz: "0" }));
+    insertFeature(feats[0]);
+    if (feats.length > 1) mutate((d) => { const i = d.features.findIndex((f) => f.id === feats[0].id); d.features.splice(i + 1, 0, ...feats.slice(1)); });
+    st.firstFit = true;
+    const nb = (v) => Math.round(v).toLocaleString("fr-FR");
+    toast(fr(`« ${base} » importé${feats.length > 1 ? ` (${feats.length} objets)` : ""}. ${before > MAX_TRIS ? `Maillage allégé de ${nb(before)} à ${nb(total)} triangles pour rester fluide. ` : ""}Tu peux esquisser sur ses faces, extruder, percer…`));
+    return;
+  }
+  if (file.size > 25e6) { toast("Fichier trop gros (25 Mo au maximum)."); return; }
+  const format = /\.stl$/i.test(file.name) ? "stl" : "step";
+  insertFeature({ id: newId("f"), type: "import", name: base, file: file.name, format, data: b64(buf), mode: "add", scale: "1", tx: "0", ty: "0", tz: "0" });
+  st.firstFit = true;
 }
 
 // ---------- Mise en plan ----------
@@ -1363,6 +1449,12 @@ function saveFile() {
   download(blob, `${safeName()}.gabarit`); toast("Pièce enregistrée dans tes téléchargements.");
 }
 async function openFile(file) {
+  if (MESH_EXT.test(file.name)) {
+    // fichier d'impression 3D ou de CAO : nouvelle pièce qui le reprend
+    if (isAsm() || doc.features.length) { save(); loadDoc(emptyDoc()); }
+    doc.name = file.name.replace(/\.[^.]+$/, ""); $("#docName").value = doc.name;
+    await importBlob(file); return;
+  }
   try {
     const d = JSON.parse(await file.text());
     if (!Array.isArray(d.features) && d.kind !== "assembly") throw new Error();
@@ -1426,7 +1518,7 @@ document.addEventListener("pointermove", (e) => { mouseAt = [e.clientX, e.client
 const S_TOOLS = ["sketch", "extrude", "cut", "revolve", "hole", "fillet", "chamfer", "shell", "mirror", "pattern", "measure", "section"];
 function shortcutBox() {
   closeMenu();
-  const list = st.editSketch ? SK_TOOLS.map(([k, l]) => [k, l, () => sketcher.setTool(k)]) : S_TOOLS.map((k) => [k, toolLabel(k), () => toolAction(k)]);
+  const list = st.editSketch ? SK_ALL.map(([k, l]) => [k, l, () => sketcher.setTool(k)]) : S_TOOLS.map((k) => [k, toolLabel(k), () => toolAction(k)]);
   const m = h("div", { class: "menu sbox", id: "menu" }, ...list.map(([k, l, fn]) => h("button", { title: l, onclick: () => { closeMenu(); fn(); } }, h("span", { html: ICONS[k] || "" }), h("small", {}, l))));
   document.body.append(m);
   const r = m.getBoundingClientRect();
@@ -1493,7 +1585,7 @@ const KEYS = {
 function commandList() {
   const L = [];
   for (const g of TOOLBAR) for (const [k, label] of g) L.push({ label, hint: TOOL_TIPS[k], keys: KEYS[k], when: () => !isAsm() && !st.editSketch, run: () => toolAction(k) });
-  for (const [k, label] of SK_TOOLS) L.push({ label: `Esquisse : ${label}`, keys: "dessiner " + k, when: () => !!st.editSketch, run: () => sketcher.setTool(k) });
+  for (const [k, label] of SK_ALL) L.push({ label: `Esquisse : ${label}`, keys: "dessiner " + k, when: () => !!st.editSketch, run: () => sketcher.setTool(k) });
   const act = (a) => document.querySelector(`[data-act=${a}]`)?.click();
   L.push(
     { label: "Nouvelle pièce ou nouvel assemblage", keys: "nouveau creer", run: () => newDialog() },
@@ -1576,7 +1668,8 @@ sketcher = new Sketcher($("#skSvg"), {
     if (f.constraints?.length && !solveAndWrite(f, [{ ref, at }])) ent.pts[ref.k] = old;
   }, true),
   select: (id) => { st.skSel = id; renderProps(); },
-  onTool: () => renderSketchTools(),
+  onTool: () => { $("#relBox")?.remove(); renderSketchTools(); },
+  onPick: (e, still) => relBox(e, still),
   onView: () => syncSketchView(),
 });
 renderTools();
@@ -1623,7 +1716,7 @@ document.addEventListener("keydown", (e) => {
   if (typing) return;
   if (e.key === "Escape" && $("#menu")) { closeMenu(); return; }
   if (e.key === "Escape") {
-    if (st.editSketch) { if (!sketcher.cancel()) { st.skSel = null; sketcher.sel = null; sketcher.subs = []; renderProps(); sketcher.render(); } return; }
+    if (st.editSketch) { if ($("#relBox")) { $("#relBox").remove(); return; } if (!sketcher.cancel()) { st.skSel = null; sketcher.sel = null; sketcher.subs = []; renderProps(); sketcher.render(); } return; }
     if (st.pick) { cancelFeature(); return; }
     if (viewer.pickMode) { viewer.setPick(null); banner(null); return; }
     if (st.pre?.edges.length || st.pre?.faces.length) { clearFaceSel(); return; }
@@ -1672,5 +1765,5 @@ typoTree(document.body);
 startWorker();
 extras.openFromHash();
 window.addEventListener("hashchange", () => extras.openFromHash());
-window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, exampleDoc, emptyAsm, library, addToLibrary, asmUI };
+window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, openSketch, exampleDoc, emptyAsm, library, addToLibrary, asmUI };
 if ("launchQueue" in window) window.launchQueue.setConsumer(async (p) => { for (const fh of p.files || []) openFile(await fh.getFile()); });

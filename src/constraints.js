@@ -10,8 +10,9 @@ export const C_LABELS = {
   equal: "Égaux", coincident: "Coïncidents", fix: "Fixe", onH: "Sur l’axe horizontal", onV: "Sur l’axe vertical",
   symV: "Symétriques (axe vertical)", symH: "Symétriques (axe horizontal)", hAlign: "Alignés horizontalement", vAlign: "Alignés verticalement",
   tangent: "Tangents", diameter: "Diamètre", distance: "Distance",
+  midpoint: "Au milieu", onLine: "Sur le côté", onCircle: "Sur le cercle",
 };
-export const C_GLYPH = { horizontal: "H", vertical: "V", parallel: "∥", perpendicular: "⊥", equal: "=", coincident: "●", fix: "⚓", onH: "—", onV: "|", symV: "⇋", symH: "⇅", hAlign: "↔", vAlign: "↕", tangent: "◠", length: "↦", diameter: "⌀", distance: "↦" };
+export const C_GLYPH = { midpoint: "◇", onLine: "∈", onCircle: "◯", horizontal: "H", vertical: "V", parallel: "∥", perpendicular: "⊥", equal: "=", coincident: "●", fix: "⚓", onH: "—", onV: "|", symV: "⇋", symH: "⇅", hAlign: "↔", vAlign: "↕", tangent: "◠", length: "↦", diameter: "⌀", distance: "↦" };
 
 // Construit le modèle : variables libres + accès aux points, segments et cercles.
 function buildModel(ents, raws) {
@@ -97,7 +98,19 @@ function residuals(model, cons, vals, pins) {
         case "vAlign": { const p = pt(R[0]), q = pt(R[1]); if (p && q) r.push(p[0] - q[0]); break; }
         case "symV": { const p = pt(R[0]), q = pt(R[1]); if (p && q) r.push(p[0] + q[0], p[1] - q[1]); break; }
         case "symH": { const p = pt(R[0]), q = pt(R[1]); if (p && q) r.push(p[0] - q[0], p[1] + q[1]); break; }
+        case "midpoint": { const p = pt(R[0]), s = seg(R[1]); if (p && s) r.push(p[0] - (s.a[0] + s.b[0]) / 2, p[1] - (s.a[1] + s.b[1]) / 2); break; }
+        case "onLine": {
+          const p = pt(R[0]), s = seg(R[1]); if (!p || !s) break;
+          const dx = s.b[0] - s.a[0], dy = s.b[1] - s.a[1], L = Math.hypot(dx, dy) || 1e-12;
+          r.push(((p[0] - s.a[0]) * dy - (p[1] - s.a[1]) * dx) / L); break;
+        }
+        case "onCircle": { const p = pt(R[0]), o = circ(R[1]); if (p && o) r.push(Math.hypot(p[0] - o.cx, p[1] - o.cy) - o.d / 2); break; }
         case "tangent": {
+          const ci = circ(R[1]), sl = seg(R[0]);
+          if (ci && sl) { // côté droit tangent à un cercle
+            const dx = sl.b[0] - sl.a[0], dy = sl.b[1] - sl.a[1], L = Math.hypot(dx, dy) || 1e-12;
+            r.push(Math.abs(((ci.cx - sl.a[0]) * dy - (ci.cy - sl.a[1]) * dx) / L) - ci.d / 2); break;
+          }
           // deux segments consécutifs d'un même contour : tangents au point commun
           const s1 = seg(R[0]), s2 = seg(R[1]); if (!s1 || !s2) break;
           let t1, t2;
