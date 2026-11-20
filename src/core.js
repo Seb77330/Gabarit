@@ -3,6 +3,7 @@ import * as R from "replicad";
 import { evalExpr, varsMap } from "./expr.js";
 import { solveSketch } from "./constraints.js";
 import { objText, threeMF } from "./meshfiles.js";
+import { readStl, writeStl, stretchZone, bakeTris } from "./mesh3mf.js";
 import FONT from "./texte.ttf";
 let fontReady = null;
 const ensureFont = () => (fontReady ||= R.loadFont(FONT.buffer.slice(FONT.byteOffset, FONT.byteOffset + FONT.byteLength), "gabarit"));
@@ -577,21 +578,36 @@ export async function build(doc, opts = {}) {
         if (sxyz.some((v) => !(v > 0))) throw new Error("Les tailles doivent être plus grandes que 0");
         const stretch = sxyz.some((v) => Math.abs(v - 1) > 1e-9);
         if (stretch && f.format !== "stl") throw new Error("Pour un fichier STEP, la taille ne peut changer que de façon égale dans les 3 directions (Échelle)");
-        const key = f.id + ":" + f.data.length + ":" + sxyz.join(",");
+        const sc = f.scale ? evalExpr(f.scale, vars) : 1;
+        const rot = [f.rx, f.ry, f.rz].map((v) => (v ? evalExpr(v, vars) : 0));
+        // zone à allonger : le milieu s'étire, les bouts gardent leur taille (travail sur le maillage)
+        let zone = null;
+        if (f.zone && f.format === "stl") {
+          const k = { x: 0, y: 1, z: 2 }[f.zone.axis] ?? 0;
+          const za = evalExpr(f.zone.a ?? 0, vars), zb = evalExpr(f.zone.b ?? 0, vars), zadd = evalExpr(f.zone.add || 0, vars);
+          if (!(za >= 0)) throw new Error("Zone à allonger : le début ne peut pas être avant le bord de la pièce");
+          if (!(zb > za + 0.01)) throw new Error("Zone à allonger : la fin doit être plus loin que le début");
+          if (!(zadd > -(zb - za) + 0.01)) throw new Error("Zone à allonger : impossible de raccourcir plus que la longueur de la zone");
+          if (Math.abs(zadd) > 1e-9) zone = { k, a: za, b: zb, add: zadd };
+        }
+        const key = f.id + ":" + f.data.length + ":" + sxyz.join(",") + (zone ? ":z" + [zone.k, zone.a, zone.b, zone.add, sc, ...rot].join(",") : "");
         let imp = importCache.get(f.id);
         if (!imp || imp.key !== key) {
           let bytes = decodeB64(f.data);
           if (stretch) bytes = stretchStl(bytes, sxyz);
+          if (zone) {
+            const m = bakeTris(readStl(bytes), sc, rot);
+            if (zone.a >= m.hi[zone.k] - m.lo[zone.k]) throw new Error("Zone à allonger : elle commence après la fin de la pièce");
+            bytes = writeStl(stretchZone(m.tris, zone.k, m.lo[zone.k] + zone.a, m.lo[zone.k] + zone.b, zone.add));
+          }
           const blob = new Blob([bytes]);
           const s = f.format === "stl" ? await stlSolid(blob) : await R.importSTEP(blob);
           if (!s) throw new Error("Fichier illisible");
           imp = { key, shape: s }; importCache.set(f.id, imp);
         }
         let s = imp.shape.clone();
-        const sc = f.scale ? evalExpr(f.scale, vars) : 1;
-        if (sc !== 1) s = s.scale(sc, [0, 0, 0]);
-        const rot = [f.rx, f.ry, f.rz].map((v) => (v ? evalExpr(v, vars) : 0));
-        if (rot.some(Boolean)) {
+        if (sc !== 1 && !zone) s = s.scale(sc, [0, 0, 0]);
+        if (rot.some(Boolean) && !zone) {
           const [lo, hi] = s.boundingBox.bounds; const c = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
           if (rot[0]) s = s.rotate(rot[0], c, [1, 0, 0]);
           if (rot[1]) s = s.rotate(rot[1], c, [0, 1, 0]);
@@ -600,7 +616,20 @@ export async function build(doc, opts = {}) {
         }
         const t = [f.tx, f.ty, f.tz].map((v) => (v ? evalExpr(v, vars) : 0));
         if (t.some(Boolean)) s = s.translate(t);
+        { const [blo, bhi] = s.boundingBox.bounds; info[f.id] = { bb: [[...blo], [...bhi]] }; }
         apply(s, f.mode || "add", f.id);
+      } else if (f.type === "slice") {
+        // coupe à plat : on enlève tout ce qui dépasse d'un côté d'un plan perpendiculaire à X, Y ou Z
+        need();
+        const k = { x: 0, y: 1, z: 2 }[f.axis] ?? 2; const at = evalExpr(f.at ?? 0, vars);
+        const [lo, hi] = shape.boundingBox.bounds; const m = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) * 0.1 + 1;
+        const a = [lo[0] - m, lo[1] - m, lo[2] - m], b = [hi[0] + m, hi[1] + m, hi[2] + m];
+        if (f.keep === "above") b[k] = at; else a[k] = at;
+        info[f.id] = { bb: [[...lo], [...hi]] };
+        if (at <= lo[k] + 1e-6 || at >= hi[k] - 1e-6) {
+          const gone = f.keep === "above" ? at >= hi[k] - 1e-6 : at <= lo[k] + 1e-6;
+          if (gone) throw new Error("La coupe enlèverait toute la pièce : rapproche le plan du milieu ou garde l’autre côté");
+        } else shape = shape.cut(R.makeBox(a, b));
       }
     } catch (e) {
       if (globalThis.GABARIT_DEBUG) console.error(f.id, e);

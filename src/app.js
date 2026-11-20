@@ -8,6 +8,7 @@ import { ICONS, SHAPE_ICONS } from "./icons.js";
 import { evalExpr, varsMap } from "./expr.js";
 import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, toWorld, STD_PLANES, cross, dot, norm, scale } from "./geo.js";
 import { exampleDoc } from "./example.js";
+import { TEMPLATES } from "./templates.js";
 import { sheetSVG } from "./drawing.js";
 import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
 import { createAssemblyUI } from "./assembly.js";
@@ -77,6 +78,7 @@ const TYPES = {
   thread: { label: "Filetage", icon: "thread" },
   helix: { label: "Ressort", icon: "helix" },
   shape: { label: "Forme", icon: "shape" },
+  slice: { label: "Coupe à plat", icon: "slice" },
 };
 const MATERIALS = { pla: ["PLA", 1.24], petg: ["PETG", 1.27], abs: ["ABS", 1.04], resine: ["Résine", 1.15], alu: ["Aluminium", 2.7], acier: ["Acier", 7.85], inox: ["Inox", 8.0], laiton: ["Laiton", 8.5], bois: ["Bois (chêne)", 0.75] };
 const STORE = "gabarit-doc-v1";
@@ -184,8 +186,26 @@ function renderTabs() {
 }
 const feat = (id) => doc.features.find((f) => f.id === id);
 const featIndex = (id) => doc.features.findIndex((f) => f.id === id);
+// Mode Simple : les mêmes étapes, avec des mots de tous les jours.
+const PLAIN_TYPE = { sketch: "Dessin", extrude: "Volume", revolve: "Tour", hole: "Trou", fillet: "Arrondi", chamfer: "Biseau", shell: "Évidement", import: "Fichier importé" };
+const typeLabel = (type) => (document.body.classList.contains("simple") && PLAIN_TYPE[type]) || TYPES[type].label;
+const PLAIN = {
+  "Esquisse utilisée": "Dessin utilisé", "Zones à extruder": "Zones à remplir", "Jusqu’à": "Jusqu’où", "Une distance": "Une épaisseur", "Une face": "Jusqu’à une face",
+  "Sens": "De quel côté", "Normal": "D’un côté", "Inversé": "De l’autre", "Distance": "Épaisseur", "Enlever de la matière": "Creuser", "Enlever": "Creuser",
+  "Axe de rotation": "Tourner autour de", "Axe vertical de l’esquisse": "L’axe vertical du dessin", "Axe horizontal": "L’axe horizontal", "Angle": "Angle (360 = tour complet)",
+  "Type de trou": "Forme du trou", "Lamé": "Tête cachée", "Fraisé": "Tête conique", "Traversant": "Traverse toute la pièce",
+  "Diamètre du lamage": "Diamètre du logement de la tête", "Profondeur du lamage": "Profondeur du logement", "Diamètre de la fraisure": "Diamètre du cône", "Angle de la fraisure": "Angle du cône",
+  "Des fonctions": "Certaines étapes", "Nombre d’exemplaires": "Combien en tout", "Écart entre deux exemplaires": "Écart entre deux", "Deuxième direction (grille)": "Répéter aussi dans un autre sens (grille)",
+  "Rayon": "Rayon de l’arrondi", "Épaisseur de paroi": "Épaisseur des parois", "Échelle": "Taille (1 = taille d’origine)",
+};
+// Remplace, dans le panneau de réglages, les mots de métier par leur version simple.
+function plainify(root) {
+  for (const el of root.querySelectorAll("label, .seg button, h2")) {
+    for (const n of el.childNodes) { if (n.nodeType !== 3) continue; const t = n.nodeValue.trim(); if (PLAIN[t]) n.nodeValue = n.nodeValue.replace(t, PLAIN[t]); }
+  }
+}
 function nextName(type) {
-  const base = TYPES[type].label; let n = 1;
+  const base = typeLabel(type); let n = 1;
   const names = new Set(doc.features.map((f) => f.name));
   while (names.has(`${base} ${n}`)) n++;
   return `${base} ${n}`;
@@ -291,7 +311,7 @@ function onWorker(m) {
     // pendant une sélection, la pièce affichée s'arrête avant l'étape : on calcule en plus l'aperçu du résultat
     const pf = st.pick?.featId ? feat(st.pick.featId) : null;
     if (m.regions && st.pick?.kind === "regions" && pf) { st.regions = m.regions; viewer.setRegions(m.regions, regionSel(pf)); }
-    if (pf && ((["fillet", "chamfer", "shell", "draft"].includes(pf.type) && (pf.edges || pf.faces || []).length) || (pf.type === "extrude" && pf.regions?.length) || pf.type === "shape") && !pf.suppressed) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
+    if (pf && ((["fillet", "chamfer", "shell", "draft"].includes(pf.type) && (pf.edges || pf.faces || []).length) || (pf.type === "extrude" && pf.regions?.length) || pf.type === "shape" || pf.type === "slice") && !pf.suppressed) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
     else viewer.setGhost(null);
     st.building = false; showBusy(false);
     if (m.heap > 1.4e9) setTimeout(restartWorker, 50); // libère la mémoire du noyau
@@ -391,14 +411,14 @@ function download(blob, name) {
 const TOOLBAR = [
   ["Esquisse", [["sketch", "Esquisse"], ["plane", "Plan"]]],
   ["Volumes", [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"], ["helix", "Ressort"], ["shapes", "Formes"]]],
-  ["Finitions", [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"]]],
+  ["Finitions", [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"], ["slice", "Coupe à plat"]]],
   ["Copies", [["mirror", "Symétrie"], ["pattern", "Répétition"], ["import", "Importer"]]],
   ["Outils", [["measure", "Mesurer"], ["section", "Coupe"], ["print", "Impression 3D"], ["drawing", "Mise en plan"]]],
 ];
 // Mode Simple : moins d'outils, des mots de tous les jours (les mêmes outils derrière).
 const TOOLBAR_SIMPLE = [
   ["Créer", [["shapes", "Formes prêtes", "hero"], ["sketch", "Dessiner"], ["import", "Importer"]]],
-  ["Volume", [["extrude", "Donner du volume"], ["cut", "Creuser"], ["revolve", "Faire tourner"]]],
+  ["Volume", [["extrude", "Donner du volume"], ["cut", "Creuser"], ["revolve", "Faire tourner"], ["slice", "Couper à plat"]]],
   ["Finitions", [["hole", "Percer"], ["fillet", "Arrondir"], ["chamfer", "Biseauter"], ["shell", "Vider"]]],
   ["Copies", [["mirror", "Symétrie"], ["pattern", "Répéter"]]],
   ["Vérifier", [["measure", "Mesurer"], ["print", "Imprimer en 3D"]]],
@@ -437,6 +457,7 @@ const TOOL_TIPS = {
   section: "Couper la vue pour voir l’intérieur",
   drawing: "Créer le plan 2D de la pièce, à imprimer ou en PDF",
   print: "Voir les surplombs à soutenir et poser la pièce à plat automatiquement",
+  slice: "Couper la pièce bien droit et enlever tout ce qui dépasse d’un côté (raccourcir, retirer un socle…)",
 };
 // Coin de confirmation dans la vue : ✓ / ✕ toujours au même endroit.
 function renderCorner() {
@@ -500,7 +521,7 @@ function toolAction(k) {
     const type = k === "cut" ? "extrude" : k;
     const sk = candidateSketch();
     const make = (skId) => {
-      const f = { id: newId("f"), type, name: k === "cut" ? nextNameRaw("Enlèvement") : nextName(type), sketch: skId, mode: k === "cut" ? "cut" : "add" };
+      const f = { id: newId("f"), type, name: k === "cut" ? nextNameRaw(isSimple() ? "Creux" : "Enlèvement") : nextName(type), sketch: skId, mode: k === "cut" ? "cut" : "add" };
       if (type === "extrude") Object.assign(f, { dist: k === "cut" ? "5" : "10", dir: k === "cut" ? "inverse" : "normal", through: false });
       else Object.assign(f, { axis: "y", angle: "360" });
       insertFeature(f);
@@ -530,6 +551,14 @@ function toolAction(k) {
   }
   if (k === "draft") { if (!st.mesh) return; const f = { id: newId("f"), type: "draft", name: nextName("draft"), angle: "3", faces: pre.faces.map((x) => x.p), plane: { kind: "std", name: "dessus", offset: "0" } }; insertFeature(f); startPick("faces", f.id); return; }
   if (k === "shell") { const f = { id: newId("f"), type: "shell", name: nextName("shell"), t: "2", faces: pre.faces.map((x) => x.p) }; insertFeature(f); startPick("faces", f.id); return; }
+  if (k === "slice") {
+    if (!st.mesh) { toast("Il faut d’abord une pièce à couper."); return; }
+    const bb = st.mesh.bb; let axis = "z", at = (bb[0][2] + bb[1][2]) / 2;
+    const pf = pre.faces.find((x) => x.info?.plane); // face plane déjà choisie : la coupe se met à son niveau
+    if (pf) { const n = pf.info.n.map(Math.abs); const i = n.indexOf(Math.max(...n)); if (n[i] > 0.999) { axis = "xyz"[i]; at = pf.p[i]; } }
+    const f = { id: newId("f"), type: "slice", name: nextName("slice"), axis, at: r2(at), keep: "below" };
+    insertFeature(f); startPick("slice", f.id); return;
+  }
   if (k === "mirror") { insertFeature({ id: newId("f"), type: "mirror", name: nextName("mirror"), target: "part", feats: [], plane: { kind: "std", name: "droite", offset: "0" } }); return; }
   if (k === "pattern") { insertFeature({ id: newId("f"), type: "pattern", name: nextName("pattern"), target: "part", feats: [], kind: "lin", axis: "x", count: "3", step: "20", angle: "360", two: false, axis2: "y", count2: "2", step2: "20" }); return; }
 }
@@ -682,10 +711,11 @@ function startPick(kind, featId) {
     upto: "Clique sur la face plane où l’extrusion doit s’arrêter.",
     regions: "Les contours se croisent : clique les zones à extruder (reclique pour en retirer une), puis Entrée.",
     place: "Clique sur la pièce pour poser la forme à cet endroit, puis Entrée. Tu peux aussi régler sa position à gauche.",
+    slice: "Clique sur la pièce à l’endroit où couper, puis Entrée. Tu peux aussi taper la position à gauche.",
   };
   banner(texts[kind]);
   viewer.setPick({ kind: kind === "edges" ? "edge" : kind === "regions" ? "region" : "face", onPick: (hit) => onPick(hit) });
-  requestBuild(0); renderProps(); refreshMarkers();
+  requestBuild(0); renderProps(); refreshMarkers(); refreshHandles();
 }
 // Valider l'étape en cours (bouton, bandeau ou touche Entrée).
 let validatedOnce = false;
@@ -701,12 +731,16 @@ function validateFeature() {
 }
 function stopPick(rebuild) {
   if (!st.pick) return;
-  st.pick = null; st.regions = null; viewer.setRegions(null); viewer.setPick(null); viewer.setGhost(null); banner(null); refreshMarkers();
+  st.pick = null; st.regions = null; viewer.setRegions(null); viewer.setPick(null); viewer.setGhost(null); banner(null); refreshMarkers(); refreshHandles();
   if (rebuild !== false) { requestBuild(0); renderProps(); }
 }
 function onPick(hit) {
   const f = feat(st.pick.featId); if (!f) return;
   const tol = viewer.size / 120;
+  if (st.pick.kind === "slice") {
+    const k = { x: 0, y: 1, z: 2 }[f.axis] ?? 2;
+    mutate(() => { f.at = r2(hit.point[k]); }); renderProps(); renderOverlay(); return;
+  }
   if (st.pick.kind === "place") {
     // la forme se pose au point cliqué, son axe suit la face (vers l'extérieur pour ajouter, vers l'intérieur pour creuser)
     let n = hit.info?.plane ? hit.info.n : hit.normal || [0, 0, 1];
@@ -901,7 +935,7 @@ function addParam() {
 function exprField(label, obj, key, unit = "mm", opts = {}) {
   const v = varsMap(doc.params);
   const calc = h("div", { class: "calc" });
-  const input = h("input", { type: "text", value: obj[key] ?? opts.def ?? "", spellcheck: "false", inputmode: "decimal" });
+  const input = h("input", { type: "text", value: obj[key] ?? opts.def ?? "", spellcheck: "false", inputmode: "decimal", "data-hk": key });
   const check = () => {
     const raw = input.value;
     if (opts.optional && !raw.trim()) { input.classList.remove("bad"); calc.classList.remove("bad"); calc.textContent = ""; input.placeholder = opts.optional; return; }
@@ -980,7 +1014,7 @@ function renderProps() {
   P.append(h("div", { class: "okbar" },
     h("button", { class: "ok", title: "Valider (Entrée)", "aria-label": "Valider", onclick: () => validateFeature() }, "✓"),
     h("button", { class: "ko", title: "Annuler les changements (Échap)", "aria-label": "Annuler", onclick: () => cancelFeature() }, "✕"),
-    h("span", { class: "lbl" }, f.type === "shape" ? (SHAPES[f.kind] || SHAPES.box)[0] : TYPES[f.type].label || "")));
+    h("span", { class: "lbl" }, f.type === "shape" ? (SHAPES[f.kind] || SHAPES.box)[0] : typeLabel(f.type) || "")));
   const head = h("div", { class: "head" }, h("span", { class: "ic", html: ICONS[TYPES[f.type].icon] }),
     h("input", { value: f.name, "aria-label": "Nom de l’étape", onchange: (e) => { mutate(() => { f.name = e.target.value.trim() || f.name; }); } }));
   P.append(head);
@@ -1148,6 +1182,21 @@ function renderProps() {
     if (picking) add(h("div", { class: "note ok" }, "Clique sur la pièce : la forme se pose à cet endroit."));
     add(h("h2", {}, "Rotation"), exprField("Autour de X", f, "rx", "°", { step: 15, def: "0" }), exprField("Autour de Y", f, "ry", "°", { step: 15, def: "0" }), exprField("Autour de Z", f, "rz", "°", { step: 15, def: "0" }));
   }
+  if (f.type === "slice") {
+    const ax = f.axis || "z";
+    add(h("div", { class: "field" }, h("label", {}, "Sens de la coupe"), h("div", { class: "seg" },
+      [["z", "À l’horizontale"], ["x", "En travers"], ["y", "En long"]].map(([v, t]) => h("button", { class: ax === v ? "on" : "", "data-axis": v, onclick: () => {
+        if (ax === v) return; const bb = st.info?.[f.id]?.bb; const k = "xyz".indexOf(v);
+        mutate(() => { f.axis = v; if (bb) f.at = r2((bb[0][k] + bb[1][k]) / 2); }); renderProps(); renderOverlay();
+      } }, t)))));
+    add(exprField({ z: "Hauteur de la coupe (Z)", x: "Position de la coupe (X)", y: "Position de la coupe (Y)" }[ax], f, "at", "mm", { def: "0", after: () => renderOverlay() }));
+    const sides = { z: ["Le bas", "Le haut"], x: ["La gauche", "La droite"], y: ["L’avant", "L’arrière"] }[ax];
+    add(h("div", { class: "field" }, h("label", {}, "Je garde"), h("div", { class: "seg" },
+      [["below", sides[0]], ["above", sides[1]]].map(([v, t]) => h("button", { class: (f.keep || "below") === v ? "on" : "", "data-keep": v, onclick: () => { mutate(() => { f.keep = v; }); renderProps(); } }, t)))));
+    const picking = st.pick?.featId === f.id && st.pick.kind === "slice";
+    if (picking) add(h("div", { class: "note ok" }, "Clique sur la pièce : la coupe se met à cet endroit."));
+    else add(h("div", { class: "btnrow" }, h("button", { class: "btn primary", onclick: () => startPick("slice", f.id) }, "Choisir sur la pièce")));
+  }
   if (f.type === "import") {
     add(h("div", { class: "note" }, `Fichier : ${f.file || "?"} (${(f.format || "").toUpperCase()}, ${nf((f.data || "").length * 0.75 / 1024, 0)} Ko)`));
     add(segField("Effet", f, "mode", [["add", "Ajouter"], ["cut", "Enlever"]]));
@@ -1176,6 +1225,30 @@ h("span", { class: "unit pct" }, `${Math.round(k(key) * sc * 100)} %`))));
       add(checkField("Garder les proportions", f, "keep"));
       if (["sx", "sy", "sz"].some((a) => k(a) !== 1) || sc !== 1) add(h("div", { class: "btnrow" }, h("button", { class: "btn", onclick: () => { mutate(() => { delete f.sx; delete f.sy; delete f.sz; f.scale = "1"; }); renderProps(); } }, "Taille d’origine")));
     } else add(exprField("Échelle", f, "scale", "×", { step: 0.1 }));
+    if (f.format === "stl") {
+      add(h("h2", {}, "Allonger une zone"));
+      const ibb = st.info?.[f.id]?.bb;
+      if (!f.zone) {
+        add(h("div", { class: "note" }, "Pour allonger le milieu sans déformer les bouts (trous, clips, pas de vis)."));
+        add(h("div", { class: "btnrow" }, h("button", { class: "btn", "data-zone": "add", onclick: () => {
+          const d = ibb ? [0, 1, 2].map((k) => ibb[1][k] - ibb[0][k]) : [30, 20, 10]; const k = d.indexOf(Math.max(...d));
+          mutate(() => { f.zone = { axis: "xyz"[k], a: r2(d[k] * 0.4), b: r2(d[k] * 0.6), add: "0" }; }); renderProps(); renderOverlay();
+        } }, "Allonger seulement une zone")));
+      } else {
+        const z = f.zone; const edge = { x: "du bord gauche", y: "du bord avant", z: "du bas" }[z.axis] || "du bord";
+        add(h("div", { class: "field" }, h("label", {}, "Dans quel sens"), h("div", { class: "seg" },
+          [["x", "Longueur (X)"], ["y", "Largeur (Y)"], ["z", "Hauteur (Z)"]].map(([v, t]) => h("button", { class: z.axis === v ? "on" : "", "data-zaxis": v, onclick: () => {
+            if (z.axis === v) return; const k = "xyz".indexOf(v); const len = ibb ? ibb[1][k] - ibb[0][k] - (z.axis === v ? Number(z.add) || 0 : 0) : 30;
+            mutate(() => { z.axis = v; z.a = r2(len * 0.4); z.b = r2(len * 0.6); }); renderProps(); renderOverlay();
+          } }, t)))));
+        const aft = { after: () => renderOverlay() };
+        add(exprField(`Début de la zone (à partir ${edge})`, z, "a", "mm", aft), exprField("Fin de la zone", z, "b", "mm", aft), exprField("Allonger de (négatif pour raccourcir)", z, "add", "mm", { def: "0", ...aft }));
+        add(h("div", { class: "btnrow" },
+          h("button", { class: "btn primary", onclick: () => pickZone(f) }, "Choisir sur la pièce"),
+          h("button", { class: "btn", "data-zone": "remove", onclick: () => { mutate(() => { delete f.zone; }); renderProps(); renderOverlay(); } }, "Retirer la zone")));
+        add(h("div", { class: "note" }, "Seule la partie entre les deux plans s’étire. Ce qui est avant et après garde sa forme."));
+      }
+    }
     add(h("h2", {}, "Rotation"), exprField("Autour de X", f, "rx", "°", { step: 90, def: "0" }), exprField("Autour de Y", f, "ry", "°", { step: 90, def: "0" }), exprField("Autour de Z", f, "rz", "°", { step: 90, def: "0" }));
     add(h("h2", {}, "Position"), exprField("Déplacement X", f, "tx"), exprField("Déplacement Y", f, "ty"), exprField("Déplacement Z", f, "tz"));
     if (f.format === "stl") add(h("div", { class: "note" }, "Un STL est un maillage : les congés et perçages fonctionnent mal dessus. Préfère le STEP quand tu l’as."));
@@ -1185,6 +1258,26 @@ h("span", { class: "unit pct" }, `${Math.round(k(key) * sc * 100)} %`))));
     h("button", { class: "btn danger", onclick: () => deleteFeature(f.id) }, "Supprimer"),
     h("button", { class: "btn ghost", title: "Met l’étape en pause sans la supprimer (pour comparer avec et sans)", onclick: () => mutate(() => { f.suppressed = !f.suppressed; }) || renderProps() }, f.suppressed ? "Réactiver" : "Mettre en pause")));
   void vars;
+  if (isSimple()) plainify(P);
+}
+
+// Zone à allonger : deux clics sur la pièce donnent son début et sa fin.
+function pickZone(f) {
+  const pts = [];
+  banner("Clique sur la pièce au début de la zone à allonger.");
+  viewer.setPick({ kind: "face", onPick: (hit) => {
+    const z = f.zone, bb = st.info?.[f.id]?.bb; if (!z || !bb) { viewer.setPick(null); banner(null); return; }
+    const k = "xyz".indexOf(z.axis); const num = (v) => Number(String(v ?? 0).replace(",", ".")) || 0;
+    const a = num(z.a), b = num(z.b), ad = num(z.add);
+    let u = hit.point[k] - bb[0][k];
+    if (ad && b > a && u > a) u = u >= b + ad ? u - ad : a + (u - a) * (b - a) / (b - a + ad); // on défait l'allongement déjà appliqué
+    pts.push(Math.max(0, u));
+    if (pts.length === 1) { banner("Clique maintenant à la fin de la zone."); viewer.setMarkers([hit.point], 0x2f6fb5); return; }
+    viewer.setPick(null); banner(null); refreshMarkers();
+    const lo = Math.min(...pts), hi = Math.max(...pts);
+    if (hi - lo < 0.05) { toast("Les deux clics sont au même endroit : recommence en cliquant plus loin."); return; }
+    mutate(() => { z.a = r2(lo); z.b = r2(hi); }); renderProps(); renderOverlay();
+  } });
 }
 
 // Dimensions d'origine d'un STL importé (lues une fois dans le fichier).
@@ -1533,8 +1626,65 @@ function offsetEntity(f, e, dRaw) {
 }
 
 // ---------- Esquisses en 3D ----------
+// ---------- Flèches à tirer dans la vue 3D ----------
+// Selon l'étape choisie : déplacer une forme prête ou un fichier importé, régler une épaisseur,
+// déplacer une coupe. On tire la flèche, la valeur suit (au millimètre ; Maj pour le dixième).
+const HCOL = [0xd9463c, 0x2f9e55, 0x2f6fb5];
+let handleList = [];
+function refreshHandles() {
+  if (viewer.drag) return;
+  handleList = [];
+  // pendant qu'on choisit des zones ou une face d'arrivée, la flèche ne doit pas prendre les clics
+  const busy = st.pick && (st.pick.kind === "regions" || st.pick.kind === "upto");
+  const f = st.sel && !busy && !isAsm() && !st.editSketch && !extras?.isPrintOpen() ? feat(st.sel) : null;
+  if (f && !f.suppressed && !engineFailed) {
+    const vars = varsMap(doc.params);
+    const plain = (v) => /^\s*-?[\d.,]*\s*$/.test(String(v ?? "")); // une formule ne se tire pas à la souris
+    const val = (v) => { try { return evalExpr(String(v ?? "").trim() === "" ? 0 : v, vars); } catch { return NaN; } };
+    const AXV = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const move = (keys, origin, labels) => keys.forEach((key, k) => {
+      if (plain(f[key]) && origin.every(isFinite)) handleList.push({ id: key, origin, dir: AXV[k], color: HCOL[k], obj: f, key, base: val(f[key]), label: labels[k] });
+    });
+    try {
+      if (f.type === "shape") move(["x", "y", "z"], [val(f.x), val(f.y), val(f.z)], ["X", "Y", "Z"]);
+      else if (f.type === "import" && st.info?.[f.id]?.bb) {
+        const bb = st.info[f.id].bb; move(["tx", "ty", "tz"], [0, 1, 2].map((k) => (bb[0][k] + bb[1][k]) / 2), ["Déplacement X", "Déplacement Y", "Déplacement Z"]);
+      } else if (f.type === "slice" && st.info?.[f.id]?.bb && plain(f.at)) {
+        const bb = st.info[f.id].bb; const k = { x: 0, y: 1, z: 2 }[f.axis] ?? 2; const o = [0, 1, 2].map((i) => (bb[0][i] + bb[1][i]) / 2); o[k] = val(f.at);
+        handleList.push({ id: "at", origin: o, dir: AXV[k], color: HCOL[k], obj: f, key: "at", base: val(f.at), label: "Coupe" });
+      } else if (f.type === "extrude" && f.end !== "face" && !f.through && plain(f.dist)) {
+        // épaisseur : la flèche part du bout de la matière, au centre du dessin
+        const sk = feat(f.sketch); const pl = resolvePlane(sk.plane, vars); const dist = val(f.dist);
+        let n = 0, cu = 0, cv = 0;
+        for (const e of sk.entities || []) { try { for (const q of outline(evalEntity(e, vars))) { cu += q[0]; cv += q[1]; n++; } } catch { /* entité incomplète */ } }
+        if (n && dist > 0) {
+          const dir = f.dir || "normal"; const sign = dir === "inverse" ? -1 : 1;
+          const o = toWorld(pl, cu / n, cv / n, dir === "sym" ? dist / 2 : sign * dist);
+          handleList.push({ id: "dist", origin: o, dir: pl.n.map((c) => c * sign), color: 0xc4552b, obj: f, key: "dist", base: dist, k: dir === "sym" ? 2 : 1, min: 0.1, label: f.mode === "cut" ? "Profondeur" : "Épaisseur" });
+        }
+      }
+    } catch { handleList = []; }
+  }
+  viewer.setHandles(handleList.map(({ id, origin, dir, color }) => ({ id, origin, dir, color })), onHandleDrag);
+}
+function onHandleDrag(id, delta, phase, e) {
+  const hd = handleList.find((x) => x.id === id); if (!hd) return 0;
+  const tip = $("#dragTip") || document.body.appendChild(h("div", { id: "dragTip", class: "dragtip" }));
+  if (phase === "end") { tip.remove(); pushHistory(); renderProps(); requestBuild(0); setTimeout(refreshHandles, 0); return 0; }
+  const step = e.shiftKey ? 0.1 : 1; const k = hd.k || 1;
+  let v = Math.round((hd.base + delta * k) / step) * step; if (hd.min !== undefined) v = Math.max(hd.min, v);
+  v = Math.round(v * 1000) / 1000;
+  if (String(v) !== String(hd.obj[hd.key])) {
+    mutate(() => { hd.obj[hd.key] = String(v); }, true);
+    const inp = $(`#props [data-hk="${hd.key}"]`); if (inp) inp.value = String(v);
+    if (hd.obj.type === "slice") renderPlanes();
+  }
+  tip.textContent = `${hd.label} : ${nf(v, 2)} mm`; tip.style.left = e.clientX + 16 + "px"; tip.style.top = e.clientY + 14 + "px";
+  return (v - hd.base) / k;
+}
+
 function renderOverlay() {
-  renderPlanes();
+  renderPlanes(); refreshHandles();
   const vars = varsMap(doc.params);
   const used = new Set(doc.features.filter((f) => f.sketch).map((f) => f.sketch));
   const list = [];
@@ -1560,6 +1710,20 @@ function renderPlanes() {
     if (f.type !== "plane" || f.suppressed || !refs[f.id]) continue;
     const r = refs[f.id]; list.push({ origin: r.origin, x: r.x, y: cross(r.n, r.x), size, active: st.sel === f.id });
   }
+  // plan de coupe d'une « Coupe à plat », ou les deux plans d'une zone à allonger
+  const sf = st.sel ? feat(st.sel) : null; const bb = sf && st.info?.[sf.id]?.bb;
+  const AXV = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const cutPlane = (k, at) => {
+    const u = (k + 1) % 3, w = (k + 2) % 3; const o = [0, 0, 0]; o[k] = at; o[u] = (bb[0][u] + bb[1][u]) / 2; o[w] = (bb[0][w] + bb[1][w]) / 2;
+    list.push({ origin: o, x: AXV[u], y: AXV[w], size: Math.max(bb[1][u] - bb[0][u], bb[1][w] - bb[0][w]) * 1.25 + 4, active: true });
+  };
+  try {
+    if (sf && bb && sf.type === "slice" && !sf.suppressed) cutPlane({ x: 0, y: 1, z: 2 }[sf.axis] ?? 2, evalExpr(sf.at ?? 0, vars));
+    if (sf && bb && sf.type === "import" && sf.zone && !sf.suppressed) {
+      const k = { x: 0, y: 1, z: 2 }[sf.zone.axis] ?? 0; const a = evalExpr(sf.zone.a ?? 0, vars), b = evalExpr(sf.zone.b ?? 0, vars), ad = evalExpr(sf.zone.add || 0, vars);
+      cutPlane(k, bb[0][k] + a); cutPlane(k, bb[0][k] + b + ad);
+    }
+  } catch { /* valeur en cours de frappe */ }
   viewer.setPlanes(list);
 }
 
@@ -1787,6 +1951,9 @@ function welcome(show) {
           act("folder", "Ouvrir un fichier", "Gabarit, STL, 3MF, STEP", () => go(() => $("#fileIn").click())),
           act("eye", "Voir l’exemple", "Une pièce toute faite", () => go(() => openTab(exampleDoc()))),
           isSimple() ? null : act("asm", "Nouvel assemblage", "Réunir plusieurs pièces", () => go(() => openTab(emptyAsm())))),
+        h("div", { class: "starters" }, h("h2", {}, "Modèles de départ"),
+          h("div", { class: "sgrid4" }, TEMPLATES.map((t) => h("button", { class: "starter", "data-starter": t.key, title: t.sub, onclick: () => go(() => { openTab(t.doc()); st.firstFit = true; }) },
+            h("span", { class: "si", html: ICONS[t.icon] }), h("b", {}, t.title), h("small", {}, t.sub))))),
         names.length ? h("div", { class: "recents" }, h("h2", {}, "Mes pièces"),
           ...names.map((n) => h("div", { class: "rec" },
             h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => openTab(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
@@ -1815,6 +1982,9 @@ function help() {
   dlg.append(h("div", { class: "dh" }, "Comment ça marche"), h("div", { class: "db", html: fr(`
     <h3>Deux modes</h3><p>En haut à droite, choisis <b>Simple</b> (l’essentiel, des formes prêtes, des mots de tous les jours) ou <b>Expert</b> (tous les outils). Tu peux passer de l’un à l’autre à tout moment, ta pièce ne change pas. Le bouton lune ou soleil change le thème.</p>
     <h3>Formes prêtes</h3><p><b>Formes prêtes</b> pose une boîte, un cylindre, une sphère, un engrenage, un texte… Clique ensuite sur la pièce pour la placer, règle sa taille à gauche, et choisis <b>Ajouter de la matière</b> ou <b>Creuser</b>.</p>
+    <h3>Tout à la souris</h3><p>Quand tu choisis une forme prête, un fichier importé, une extrusion ou une coupe, des <b>flèches</b> apparaissent sur la pièce : tire-les pour déplacer ou pour régler l’épaisseur. La valeur avance au millimètre ; garde <b>Maj</b> enfoncée pour le dixième. Tu peux toujours taper la valeur exacte à gauche.</p>
+    <h3>Fichiers d’impression 3D</h3><p>Ouvre un STL ou un 3MF, puis clique sur son étape. <b>Taille</b> l’étire dans un seul sens. <b>Allonger seulement une zone</b> étire le milieu entre deux plans sans déformer les bouts (trous, clips, pas de vis). <b>Coupe à plat</b> enlève tout ce qui dépasse d’un côté d’un plan : pratique pour raccourcir ou retirer un socle.</p>
+    <h3>Modèles de départ</h3><p>Sur l’écran d’accueil, quatre objets tout faits (porte-clés, boîte, crochet, support de téléphone) : ouvre-en un, clique sur ses étapes à gauche et change les tailles ou le texte.</p>
     <h3>1. L’esquisse</h3><p>Clique sur <b>Esquisse</b>, choisis un plan (ou une face de la pièce), puis dessine des rectangles, cercles, rainures, polygones ou un contour libre. Tape les cotes exactes à droite. Une forme placée dans une autre devient un trou.</p>
     <h3>2. Le volume</h3><p><b>Extrusion</b> donne de l’épaisseur, <b>Enlèvement</b> creuse, <b>Révolution</b> fait tourner le profil autour d’un axe (pour les pièces rondes).</p>
     <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>

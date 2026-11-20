@@ -14,16 +14,16 @@ const { chromium } = require("playwright");
   await p.waitForSelector("[data-size=sx]");
   const sizes = await p.$$eval("[data-size]", (l) => l.map((x) => x.value));
   ok(sizes.join() === "40,30,10", "tailles affichées : " + sizes.join(" × "));
-  await p.fill("[data-size=sx]", "70"); await p.press("[data-size=sx]", "Enter"); await idle();
+  await p.fill("[data-size=sx]", "70"); await p.press("[data-size=sx]", "Tab"); await idle();
   let B = await bb(); console.log(JSON.stringify(B));
   ok(Math.abs(B[1][0] - B[0][0] - 70) < 0.01 && Math.abs(B[1][1] - B[0][1] - 30) < 0.01 && Math.abs(B[1][2] - B[0][2] - 10) < 0.01, "allongée en X seulement : 70 × 30 × 10");
-  await p.fill("[data-size=sz]", "25"); await p.press("[data-size=sz]", "Enter"); await idle();
+  await p.fill("[data-size=sz]", "25"); await p.press("[data-size=sz]", "Tab"); await idle();
   B = await bb(); ok(Math.abs(B[1][2] - B[0][2] - 25) < 0.01 && Math.abs(B[0][2]) < 0.01, "rehaussée à 25 mm, toujours posée sur z = 0");
   ok(Math.abs(await p.evaluate(() => window.gabarit.st.mesh.volume) - 70 * 30 * 25) < 1, "volume 70 × 30 × 25");
   await p.screenshot({ path: "/tmp/claude-0/shots/98-etirer.png" });
   // proportions gardées
   await p.click("label.check >> text=Garder les proportions"); await p.waitForTimeout(200);
-  await p.fill("[data-size=sy]", "60"); await p.press("[data-size=sy]", "Enter"); await idle();
+  await p.fill("[data-size=sy]", "60"); await p.press("[data-size=sy]", "Tab"); await idle();
   B = await bb(); const d = [0, 1, 2].map((k) => Math.round((B[1][k] - B[0][k]) * 100) / 100);
   ok(d.join() === "140,60,50", "proportions gardées : " + d.join(" × "));
   // rotation

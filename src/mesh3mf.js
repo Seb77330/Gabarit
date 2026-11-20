@@ -293,3 +293,70 @@ export function readStl(u8) {
   if (!out.length || out.length % 9) throw new Error("Fichier STL illisible.");
   return Float32Array.from(out);
 }
+
+// Triangles → STL binaire, tel quel (sans recentrage).
+export function writeStl(tris) {
+  const nT = Math.floor(tris.length / 9); const buf = new ArrayBuffer(84 + nT * 50); const dv = new DataView(buf);
+  dv.setUint32(80, nT, true);
+  for (let t = 0; t < nT; t++) {
+    const b = 84 + t * 50, q = t * 9;
+    const ux = tris[q + 3] - tris[q], uy = tris[q + 4] - tris[q + 1], uz = tris[q + 5] - tris[q + 2];
+    const vx = tris[q + 6] - tris[q], vy = tris[q + 7] - tris[q + 1], vz = tris[q + 8] - tris[q + 2];
+    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, L = Math.hypot(nx, ny, nz) || 1;
+    dv.setFloat32(b, nx / L, true); dv.setFloat32(b + 4, ny / L, true); dv.setFloat32(b + 8, nz / L, true);
+    for (let k = 0; k < 9; k++) dv.setFloat32(b + 12 + k * 4, tris[q + k], true);
+  }
+  return new Uint8Array(buf);
+}
+
+// Coupe chaque triangle par le plan « coordonnée k = v » : après, aucun triangle ne traverse le plan.
+export function splitAt(tris, k, v) {
+  const out = []; const eps = 1e-5;
+  // point d'un côté sur le plan, calculé toujours dans le même sens : deux triangles voisins trouvent les mêmes chiffres
+  const cut = (p, q) => {
+    const [a, b] = p[k] < q[k] ? [p, q] : [q, p];
+    const t = (v - a[k]) / (b[k] - a[k]);
+    const r = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; r[k] = v; return r;
+  };
+  for (let i = 0; i + 8 < tris.length; i += 9) {
+    const P = [[tris[i], tris[i + 1], tris[i + 2]], [tris[i + 3], tris[i + 4], tris[i + 5]], [tris[i + 6], tris[i + 7], tris[i + 8]]];
+    const s = P.map((p) => (p[k] > v + eps ? 1 : p[k] < v - eps ? -1 : 0));
+    if (!(s.includes(1) && s.includes(-1))) { out.push(...P[0], ...P[1], ...P[2]); continue; }
+    const lo = [], hi = [];
+    for (let j = 0; j < 3; j++) {
+      const a = P[j], b = P[(j + 1) % 3], sa = s[j], sb = s[(j + 1) % 3];
+      if (sa <= 0) lo.push(a);
+      if (sa >= 0) hi.push(a);
+      if (sa * sb < 0) { const c = cut(a, b); lo.push(c); hi.push(c); }
+    }
+    for (const poly of [lo, hi]) for (let j = 1; j + 1 < poly.length; j++) out.push(...poly[0], ...poly[j], ...poly[j + 1]);
+  }
+  return out;
+}
+
+// Allonge une zone le long de l'axe k : avant « a » rien ne bouge, entre « a » et « b » la matière
+// s'étire, après « b » tout se décale d'un bloc. Les bouts (trous, clips, filets) gardent leur taille.
+export function stretchZone(tris, k, a, b, add) {
+  const t = splitAt(splitAt(tris, k, a), k, b); const f = (b - a + add) / (b - a);
+  for (let i = k; i < t.length; i += 3) { const c = t[i]; t[i] = c <= a ? c : c >= b ? c + add : a + (c - a) * f; }
+  return t;
+}
+
+// Applique au maillage l'échelle puis les rotations autour du centre (comme le fait le noyau sur
+// un solide) ; la pièce reste posée au même niveau. Renvoie les triangles et la boîte englobante.
+export function bakeTris(src, sc, rot) {
+  const t = Array.from(src, (v) => v * sc);
+  const box = () => { const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]; for (let i = 0; i < t.length; i++) { const c = i % 3; if (t[i] < lo[c]) lo[c] = t[i]; if (t[i] > hi[c]) hi[c] = t[i]; } return [lo, hi]; };
+  let [lo, hi] = box();
+  if (rot.some(Boolean)) {
+    const z0 = lo[2]; const c = [0, 1, 2].map((k) => (lo[k] + hi[k]) / 2);
+    const turn = (deg, u, w) => { // rotation dans le plan des axes u, w
+      if (!deg) return; const r = deg * Math.PI / 180, co = Math.cos(r), si = Math.sin(r);
+      for (let i = 0; i < t.length; i += 3) { const a = t[i + u] - c[u], b = t[i + w] - c[w]; t[i + u] = c[u] + a * co - b * si; t[i + w] = c[w] + a * si + b * co; }
+    };
+    turn(rot[0], 1, 2); turn(rot[1], 2, 0); turn(rot[2], 0, 1);
+    [lo, hi] = box();
+    const dz = z0 - lo[2]; if (Math.abs(dz) > 1e-9) { for (let i = 2; i < t.length; i += 3) t[i] += dz; lo[2] += dz; hi[2] += dz; }
+  }
+  return { tris: t, lo, hi };
+}

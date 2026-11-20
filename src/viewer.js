@@ -58,6 +58,7 @@ export class Viewer {
     this.pickMode = null; // { kind: "face" | "edge" | "point", onPick }
     this.data = null; this.size = 100;
     this.markers = [];
+    this.handles = []; this.handleGroup = null; this.drag = null; this.tmpV = new THREE.Vector3();
     this.ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, side: THREE.DoubleSide, vertexShader: GROUND_VS, fragmentShader: GROUND_FS,
       uniforms: { uStep: { value: 10 }, uFade: { value: 300 }, uShadow: { value: 0.2 }, uSoft: { value: 20 }, uAlpha: { value: 1 }, uCenter: { value: new THREE.Vector2() }, uHalf: { value: new THREE.Vector2() }, uLine: { value: new THREE.Color(0x6f7a89) } },
@@ -67,6 +68,11 @@ export class Viewer {
     this.resize();
     new ResizeObserver(() => this.resize()).observe(host);
     const el = this.renderer.domElement;
+    // flèches à tirer : elles passent avant la rotation de la vue
+    el.addEventListener("pointerdown", (e) => this.handleDown(e), true);
+    el.addEventListener("pointermove", (e) => this.handleMove(e), true);
+    el.addEventListener("pointerup", (e) => this.handleUp(e), true);
+    el.addEventListener("pointercancel", (e) => this.handleUp(e), true);
     let down = null;
     el.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY, e.button]; });
     el.addEventListener("pointermove", (e) => this.onMove(e));
@@ -84,6 +90,11 @@ export class Viewer {
       const below = this.camera.position.z < this.ground.position.z;
       this.ground.visible = !this.sketchView;
       this.ground.material.uniforms.uAlpha.value = below ? 0.3 : 1; this.ground.material.uniforms.uShadow.value = below || !this.hasBox ? 0 : this.shadowK;
+      if (this.handleGroup) {
+        this.handleGroup.visible = !this.sketchView;
+        const px = 2 * Math.tan(this.camera.fov * Math.PI / 360) / (this.renderer.domElement.clientHeight || 1); // taille d'un pixel à 1 mm de distance
+        for (const g of this.handles) { g.getWorldPosition(this.tmpV); g.scale.setScalar(Math.max(1e-6, this.tmpV.distanceTo(this.camera.position) * px * 78)); }
+      }
       this.renderer.render(this.scene, this.sketchView ? this.sketchCam : this.camera); this.updateCube(); requestAnimationFrame(loop);
     };
     loop();
@@ -191,6 +202,77 @@ export class Viewer {
       s.position.set(...m.p); s.renderOrder = 10; this.markerGroup.add(s);
     }
     this.scene.add(this.markerGroup);
+  }
+  // Flèches à tirer dans la vue. Chaque poignée : { id, origin, dir, color }. Pendant qu'on tire,
+  // onDrag(id, distance le long de la flèche, "move" | "end", événement) renvoie la distance retenue.
+  setHandles(list, onDrag) {
+    if (this.drag) return;
+    if (this.handleGroup) { this.scene.remove(this.handleGroup); this.handleGroup.traverse((o) => o.geometry?.dispose()); }
+    this.handles = []; this.handleGroup = null; this.onHandle = onDrag; this.hotHandle = null;
+    if (!list?.length) return;
+    this.handleGroup = new THREE.Group();
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const hd of list) {
+      const g = new THREE.Group(); g.position.set(...hd.origin);
+      const dir = new THREE.Vector3(...hd.dir).normalize(); g.quaternion.setFromUnitVectors(up, dir);
+      const mat = new THREE.MeshBasicMaterial({ color: hd.color ?? 0xc4552b, depthTest: false, transparent: true, opacity: 0.92 });
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.74, 12), mat); shaft.position.y = 0.37;
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.115, 0.3, 24), mat); tip.position.y = 0.88;
+      const hit = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 1.0, 8), new THREE.MeshBasicMaterial({ visible: false })); hit.position.y = 0.56;
+      shaft.renderOrder = tip.renderOrder = 30;
+      g.add(shaft, tip, hit); g.userData = { hd, mat, hit, dir, color: mat.color.getHex() };
+      this.handleGroup.add(g); this.handles.push(g);
+    }
+    this.scene.add(this.handleGroup);
+  }
+  handleAt(e) {
+    if (!this.handles.length || this.sketchView) return null;
+    this.ray(e);
+    const hits = this.raycaster.intersectObjects(this.handles.map((g) => g.userData.hit), false);
+    return hits.length ? hits[0].object.parent : null;
+  }
+  // distance le long de la flèche du point le plus proche du rayon de la souris
+  handleT(e, o, d) {
+    this.ray(e); const P = this.raycaster.ray.origin, V = this.raycaster.ray.direction;
+    const w = o.clone().sub(P); const b = d.dot(V), dd = d.dot(w), ee = V.dot(w); const den = 1 - b * b;
+    return den < 1e-4 ? null : (b * ee - dd) / den;
+  }
+  handleDown(e) {
+    if (e.button !== 0) return;
+    const g = this.handleAt(e); if (!g) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    const o = g.getWorldPosition(new THREE.Vector3()); const t0 = this.handleT(e, o, g.userData.dir);
+    if (t0 === null) return;
+    this.drag = { g, o, t0, pid: e.pointerId, applied: 0 };
+    try { this.renderer.domElement.setPointerCapture(e.pointerId); } catch { /* pointeur déjà relâché */ }
+    this.renderer.domElement.style.cursor = "grabbing";
+  }
+  handleMove(e) {
+    if (this.drag) {
+      e.stopImmediatePropagation();
+      const { g, o, t0 } = this.drag; const t = this.handleT(e, o, g.userData.dir); if (t === null) return;
+      const applied = this.onHandle?.(g.userData.hd.id, t - t0, "move", e);
+      this.drag.applied = typeof applied === "number" ? applied : t - t0;
+      this.handleGroup.position.copy(g.userData.dir).multiplyScalar(this.drag.applied);
+      return;
+    }
+    if (!this.handles.length) return;
+    const g = e.buttons ? null : this.handleAt(e);
+    if (g !== this.hotHandle) {
+      if (this.hotHandle) this.hotHandle.userData.mat.color.setHex(this.hotHandle.userData.color);
+      this.hotHandle = g; if (g) g.userData.mat.color.setHex(0xffb020);
+      if (!this.pickMode) this.renderer.domElement.style.cursor = g ? "grab" : "";
+      else if (g) this.renderer.domElement.style.cursor = "grab"; else this.renderer.domElement.style.cursor = "crosshair";
+    }
+    if (g) { e.stopImmediatePropagation(); this.clearHover(); }
+  }
+  handleUp(e) {
+    if (!this.drag) return;
+    e.stopImmediatePropagation();
+    const d = this.drag; this.drag = null;
+    try { this.renderer.domElement.releasePointerCapture(d.pid); } catch { /* déjà relâché */ }
+    this.renderer.domElement.style.cursor = this.pickMode ? "crosshair" : "";
+    this.onHandle?.(d.g.userData.hd.id, d.applied, "end", e);
   }
   setPick(mode) { this.pickMode = mode; this.clearHover(); this.renderer.domElement.style.cursor = mode ? "crosshair" : ""; }
   ray(e) {
