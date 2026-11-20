@@ -13,14 +13,38 @@ export const scale = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
 export const norm = (a) => { const l = Math.hypot(...a) || 1; return scale(a, 1 / l); };
 
 // Plan résolu {origin, x, y, n} à partir de la définition stockée.
-export function resolvePlane(def, vars) {
+export function resolvePlane(def, vars, refs = {}) {
   let base;
-  if (!def || def.kind !== "face") base = STD_PLANES[def?.name || "dessus"];
+  if (def?.kind === "ref") {
+    base = refs[def.ref];
+    if (!base) throw new Error("Le plan de référence choisi n’existe plus (ou il est placé après)");
+  } else if (!def || def.kind !== "face") base = STD_PLANES[def?.name || "dessus"];
   else base = def;
   const n = norm(base.n), x = norm(base.x), y = cross(n, x);
   let off = 0;
   if (def && def.offset !== undefined && def.offset !== "") off = evalExpr(def.offset, vars);
   return { origin: addv(base.origin, scale(n, off)), x, y, n };
+}
+// Plans de référence de la pièce (fonctions « plane »), calculés dans l'ordre.
+export function refPlanes(features, vars, upTo = Infinity) {
+  const refs = {};
+  for (let i = 0; i < features.length && i < upTo; i++) {
+    const f = features[i];
+    if (f.type !== "plane" || f.suppressed) continue;
+    try {
+      const b0 = resolvePlane(f.base, vars, refs);
+      const off = f.offset !== undefined && f.offset !== "" ? evalExpr(f.offset, vars) : 0;
+      const b = { ...b0, origin: addv(b0.origin, scale(b0.n, off)) };
+      const a = (f.angle ? evalExpr(f.angle, vars) : 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
+      let { x, y, n } = b;
+      if (a) {
+        if (f.rot === "y") { const n2 = addv(scale(n, c), scale(x, sn)); x = addv(scale(n, -sn), scale(x, c)); n = n2; }
+        else { const n2 = addv(scale(y, -sn), scale(n, c)); y = addv(scale(y, c), scale(n, sn)); n = n2; }
+      }
+      refs[f.id] = { origin: b.origin, x: norm(x), n: norm(n), name: f.name };
+    } catch { /* plan invalide : signalé par le noyau */ }
+  }
+  return refs;
 }
 export const toWorld = (pl, u, v, w = 0) => addv(addv(addv(pl.origin, scale(pl.x, u)), scale(pl.y, v)), scale(pl.n, w));
 
@@ -30,8 +54,14 @@ export const ENT_FIELDS = {
   polygon: ["cx", "cy", "d", "n", "a"],
   slot: ["x1", "y1", "x2", "y2", "w"],
   poly: ["r"],
+  path: [],
   point: ["cx", "cy"],
+  ellipse: ["cx", "cy", "rx", "ry", "a"],
+  spline: [],
+  text: ["cx", "cy", "h", "a"],
 };
+export const hasPts = (t) => t === "poly" || t === "path" || t === "spline";
+export const isOpen = (o) => o.type === "path" || (o.type === "spline" && !o.closed);
 
 // Évalue une entité : remplace les expressions par des nombres.
 export function evalEntity(e, vars) {
@@ -40,7 +70,9 @@ export function evalEntity(e, vars) {
     const raw = e[f];
     o[f] = raw === undefined || raw === "" ? 0 : evalExpr(raw, vars);
   }
-  if (e.type === "poly") o.pts = (e.pts || []).map((p) => [evalExpr(p[0], vars), evalExpr(p[1], vars)]);
+  if (e.type === "spline") o.closed = !!e.closed;
+  if (e.type === "text") o.txt = String(e.txt ?? "");
+  if (hasPts(e.type)) o.pts = (e.pts || []).map((p) => [evalExpr(p[0], vars), evalExpr(p[1], vars), p[2] === undefined || p[2] === "" ? 0 : evalExpr(p[2], vars)]);
   return o;
 }
 
@@ -50,7 +82,12 @@ export function checkEntity(o) {
   if (o.type === "circle") pos(o.d, "Le diamètre");
   if (o.type === "polygon") { pos(o.d, "Le diamètre"); if (o.n < 3 || o.n > 64) throw new Error("Il faut entre 3 et 64 côtés"); }
   if (o.type === "slot") { pos(o.w, "La largeur"); if (Math.hypot(o.x2 - o.x1, o.y2 - o.y1) < 1e-6) throw new Error("La rainure a une longueur nulle"); }
-  if (o.type === "poly" && o.pts.length < 3) throw new Error("Un contour libre demande au moins 3 points");
+  if (o.type === "poly" && o.pts.length < 2) throw new Error("Un contour libre demande au moins 2 points");
+  if (o.type === "poly" && o.pts.length === 2 && !o.pts.some((p) => p[2])) throw new Error("Avec 2 points, courbe au moins un côté");
+  if (o.type === "path" && o.pts.length < 2) throw new Error("Un chemin demande au moins 2 points");
+  if (o.type === "text") { pos(o.h, "La hauteur du texte"); if (!o.txt.trim()) throw new Error("Le texte est vide"); }
+  if (o.type === "ellipse") { pos(o.rx, "Le demi-axe 1"); pos(o.ry, "Le demi-axe 2"); }
+  if (o.type === "spline" && o.pts.length < (o.closed ? 3 : 2)) throw new Error(o.closed ? "Une courbe fermée demande au moins 3 points" : "Une courbe demande au moins 2 points");
 }
 
 const rot = (p, a, c) => { const r = a * Math.PI / 180, cs = Math.cos(r), sn = Math.sin(r); return [c[0] + p[0] * cs - p[1] * sn, c[1] + p[0] * sn + p[1] * cs]; };
@@ -77,8 +114,56 @@ export function outline(o) {
     const ang = Math.atan2(o.y2 - o.y1, o.x2 - o.x1), r = o.w / 2;
     return [...arcPts(o.x2, o.y2, r, ang - Math.PI / 2, ang + Math.PI / 2, 16), ...arcPts(o.x1, o.y1, r, ang + Math.PI / 2, ang + 1.5 * Math.PI, 16)];
   }
-  if (o.type === "poly") return o.pts;
+  if (o.type === "poly") return segPts(o.pts, true);
+  if (o.type === "path") return segPts(o.pts, false);
+  if (o.type === "text") { const w = textWidth(o.txt, o.h); return [[0, -0.3 * o.h], [w, -0.3 * o.h], [w, 1.02 * o.h], [0, 1.02 * o.h]].map((p) => rot(p, o.a || 0, [o.cx, o.cy])); }
+  if (o.type === "ellipse") { const out = []; for (let i = 0; i < 72; i++) { const t = i / 72 * Math.PI * 2; out.push(rot([o.rx * Math.cos(t), o.ry * Math.sin(t)], o.a || 0, [o.cx, o.cy])); } return out; }
+  if (o.type === "spline") { const segs = bezierSegs(o.pts, o.closed); const out = [segs[0]?.[0] || o.pts[0]]; for (const [p0, c1, c2, p1] of segs) for (let i = 1; i <= 12; i++) { const t = i / 12, u = 1 - t; out.push([0, 1].map((k) => u * u * u * p0[k] + 3 * u * u * t * c1[k] + 3 * u * t * t * c2[k] + t * t * t * p1[k])); } if (o.closed) out.pop(); return out; }
   return [];
+}
+// Largeur approchée d'un texte (police grasse) pour l'aperçu et l'imbrication.
+export function textWidth(txt, h) {
+  let w = 0; for (const ch of txt) w += /[iIjl.,;:!'|]/.test(ch) ? 0.34 : /[mwMW@]/.test(ch) ? 1.0 : ch === " " ? 0.35 : /[A-Z]/.test(ch) ? 0.76 : /[0-9]/.test(ch) ? 0.7 : 0.64;
+  return (w * h) / 0.73;
+}
+// Courbe lisse passant par tous les points (Catmull-Rom convertie en segments de Bézier cubiques).
+export function bezierSegs(pts, closed) {
+  const P = pts.map((p) => [p[0], p[1]]); const n = P.length; const out = [];
+  if (n < 2) return out;
+  const at = (i) => (closed ? P[(i + n) % n] : P[Math.max(0, Math.min(n - 1, i))]);
+  for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    out.push([p1, [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6], p2]);
+  }
+  return out;
+}
+// Arc défini par sa flèche s (distance du milieu de la corde au milieu de l'arc, positif = à gauche).
+export function arcThrough(a, b, s, steps = 16) {
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+  const m = [mx - dy / L * s, my + dx / L * s];
+  const h = L / 2, R = (h * h + s * s) / (2 * Math.abs(s));
+  const sign = s > 0 ? 1 : -1;
+  const c = [mx - dy / L * sign * (Math.abs(s) - R) * 1, my + dx / L * sign * (Math.abs(s) - R)];
+  const a0 = Math.atan2(a[1] - c[1], a[0] - c[0]), am = Math.atan2(m[1] - c[1], m[0] - c[0]);
+  let a1 = Math.atan2(b[1] - c[1], b[0] - c[0]);
+  // sens qui passe par m
+  const norm2 = (x) => { while (x < 0) x += 2 * Math.PI; while (x >= 2 * Math.PI) x -= 2 * Math.PI; return x; };
+  const ccw = norm2(am - a0) < norm2(a1 - a0);
+  let sweep = ccw ? norm2(a1 - a0) : -norm2(a0 - a1);
+  const out = [];
+  for (let i = 1; i < steps; i++) { const t = a0 + sweep * i / steps; out.push([c[0] + R * Math.cos(t), c[1] + R * Math.sin(t)]); }
+  return out;
+}
+export function segPts(pts, closed) {
+  const out = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i]; out.push([a[0], a[1]]);
+    if (!closed && i === n - 1) break;
+    const b = pts[(i + 1) % n];
+    if (a[2]) out.push(...arcThrough(a, b, a[2]));
+  }
+  return out;
 }
 export function polyArea(p) { let a = 0; for (let i = 0; i < p.length; i++) { const q = p[(i + 1) % p.length]; a += p[i][0] * q[1] - q[0] * p[i][1]; } return a / 2; }
 export function inPoly(pt, p) {
@@ -90,7 +175,7 @@ export function inPoly(pt, p) {
 }
 // Ordre et rôle (ajout ou trou) de chaque contour fermé de l'esquisse.
 export function nestProfiles(list) {
-  const items = list.filter((o) => o.type !== "point" && !o.construction).map((o) => {
+  const items = list.filter((o) => o.type !== "point" && !isOpen(o) && !o.construction).map((o) => {
     const pts = outline(o); return { o, pts, area: Math.abs(polyArea(pts)) };
   }).sort((a, b) => b.area - a.area);
   for (let i = 0; i < items.length; i++) {

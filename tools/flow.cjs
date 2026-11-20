@@ -71,7 +71,7 @@ const { chromium } = require("playwright");
   // export
   const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), p.click("[data-act=stl]")]);
   const path = "/tmp/claude-0/shots/test.stl"; await dl.saveAs(path); console.log("stl", dl.suggestedFilename(), require("fs").statSync(path).size);
-  const [dl2] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), p.click("[data-act=step]")]);
+  const [dl2] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), (async () => { await p.click("[data-act=more]"); await p.click("#dlg .planes button >> nth=0"); })()]);
   await dl2.saveAs("/tmp/claude-0/shots/test.step"); console.log("step", dl2.suggestedFilename(), require("fs").statSync("/tmp/claude-0/shots/test.step").size);
   // annuler
   await p.keyboard.press("Control+z"); await p.waitForTimeout(300);

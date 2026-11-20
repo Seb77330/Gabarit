@@ -4,7 +4,7 @@ import fs from "node:fs";
 import zlib from "node:zlib";
 const VERSION = JSON.parse(fs.readFileSync("package.json")).version;
 fs.rmSync("dist", { recursive: true, force: true }); fs.mkdirSync("dist", { recursive: true });
-const common = { bundle: true, minify: true, legalComments: "none", target: ["chrome110", "firefox115", "safari16.4"] };
+const common = { bundle: true, minify: true, legalComments: "none", loader: { ".ttf": "binary" }, target: ["chrome110", "firefox115", "safari16.4"] };
 await esbuild.build({ ...common, entryPoints: ["src/app.js"], outfile: "dist/app.js", format: "iife", define: { GABARIT_VERSION: JSON.stringify(VERSION) } });
 await esbuild.build({ ...common, entryPoints: ["src/worker.js"], outfile: "dist/worker.js", format: "iife", platform: "browser", external: ["node:*"], define: { "import.meta.url": "self.location.href" }, logLevel: "error" });
 for (const f of ["index.html", "style.css", "icon.svg", "manifest.webmanifest", "icon-192.png", "icon-512.png"]) if (fs.existsSync("web/" + f)) fs.copyFileSync("web/" + f, "dist/" + f);
