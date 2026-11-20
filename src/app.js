@@ -95,6 +95,56 @@ function addToLibrary(d) {
   const lib = library(); lib[d.name || "Pièce sans nom"] = { ...JSON.parse(JSON.stringify(d)), savedAt: Date.now() };
   try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* stockage plein */ }
 }
+// ---------- Onglets : plusieurs pièces ouvertes, comme des pages ----------
+const TABS = "gabarit-tabs";
+let tabs = { list: [], active: null };
+try { tabs = JSON.parse(localStorage.getItem(TABS) || "null") || tabs; } catch { /* rien */ }
+const tabKey = (id) => "gabarit-tab-" + id;
+const isBlank = (d) => d && d.kind !== "assembly" && !(d.features || []).length && !(d.params || []).length;
+function saveTabs() { try { localStorage.setItem(TABS, JSON.stringify(tabs)); } catch { /* stockage plein */ } }
+function stashActive() {
+  const t = tabs.list.find((x) => x.id === tabs.active); if (!t) return;
+  t.name = doc.name; try { localStorage.setItem(tabKey(t.id), JSON.stringify(doc)); } catch { /* stockage plein */ }
+}
+// Ouvre d dans un nouvel onglet (ou dans l'onglet actuel s'il est vide).
+function openTab(d) {
+  const cur = tabs.list.find((x) => x.id === tabs.active);
+  if (cur && isBlank(doc)) { cur.name = d.name; saveTabs(); loadDoc(d); renderTabs(); return; }
+  stashActive();
+  const id = newId("t"); tabs.list.push({ id, name: d.name || "Pièce sans nom" }); tabs.active = id; saveTabs();
+  loadDoc(d); save(); renderTabs();
+}
+function switchTab(id) {
+  if (id === tabs.active) return;
+  if (st.editSketch) closeSketch(true);
+  stashActive(); let d = null; try { d = JSON.parse(localStorage.getItem(tabKey(id)) || "null"); } catch { d = null; }
+  tabs.active = id; saveTabs(); loadDoc(d || emptyDoc()); save(); renderTabs();
+}
+function closeTab(id) {
+  const i = tabs.list.findIndex((x) => x.id === id); if (i < 0) return;
+  if (id === tabs.active && !isAsm()) addToLibrary(doc);
+  const name = tabs.list[i].name;
+  tabs.list.splice(i, 1); try { localStorage.removeItem(tabKey(id)); } catch { /* rien */ }
+  if (id === tabs.active) {
+    const next = tabs.list[Math.min(i, tabs.list.length - 1)];
+    if (next) { tabs.active = null; saveTabs(); switchTabTo(next.id); }
+    else { const nid = newId("t"); tabs.list.push({ id: nid, name: "Pièce sans nom" }); tabs.active = nid; saveTabs(); loadDoc(emptyDoc()); save(); }
+  } else saveTabs();
+  renderTabs();
+  if (name && name !== "Pièce sans nom") toast(fr(`« ${name} » fermée. Elle reste dans « Mes pièces » si tu veux la rouvrir.`));
+}
+function switchTabTo(id) { let d = null; try { d = JSON.parse(localStorage.getItem(tabKey(id)) || "null"); } catch { d = null; } tabs.active = id; saveTabs(); loadDoc(d || emptyDoc()); save(); }
+function renderTabs() {
+  const bar = $("#tabs"); if (!bar) return;
+  const cur = tabs.list.find((x) => x.id === tabs.active); if (cur) cur.name = doc.name;
+  bar.innerHTML = "";
+  for (const t of tabs.list) {
+    bar.append(h("div", { class: "tab" + (t.id === tabs.active ? " on" : ""), title: t.name, onclick: () => switchTab(t.id), onauxclick: (e) => { if (e.button === 1) closeTab(t.id); } },
+      h("span", { class: "nm" }, t.name || "Pièce sans nom"),
+      h("button", { class: "x", title: "Fermer cet onglet", "aria-label": "Fermer", onclick: (e) => { e.stopPropagation(); closeTab(t.id); } }, "✕")));
+  }
+  bar.append(h("button", { class: "tab-new", title: "Nouvelle pièce dans un nouvel onglet", onclick: () => { openTab(emptyDoc()); welcome(false); toolAction("sketch"); } }, "+"));
+}
 const feat = (id) => doc.features.find((f) => f.id === id);
 const featIndex = (id) => doc.features.findIndex((f) => f.id === id);
 function nextName(type) {
@@ -117,6 +167,8 @@ function save() {
   try { localStorage.setItem(STORE, JSON.stringify(doc)); }
   catch { if (!st.saveWarned) { st.saveWarned = true; toast("Pièce trop lourde pour l’enregistrement automatique : pense à faire « Enregistrer » (Ctrl+S)."); } }
   if (!isAsm()) { clearTimeout(libTimer); libTimer = setTimeout(() => addToLibrary(doc), 800); }
+  const t = tabs.list.find((x) => x.id === tabs.active);
+  if (t && t.name !== doc.name) { t.name = doc.name; saveTabs(); renderTabs(); }
 }
 function undo() { if (hidx > 0) { hidx--; restore(); } }
 function redo() { if (hidx < hist.length - 1) { hidx++; restore(); } }
@@ -921,7 +973,33 @@ function renderProps() {
   if (f.type === "import") {
     add(h("div", { class: "note" }, `Fichier : ${f.file || "?"} (${(f.format || "").toUpperCase()}, ${nf((f.data || "").length * 0.75 / 1024, 0)} Ko)`));
     add(segField("Effet", f, "mode", [["add", "Ajouter"], ["cut", "Enlever"]]));
-    add(exprField("Échelle", f, "scale", "×", { step: 0.1 }), exprField("Déplacement X", f, "tx"), exprField("Déplacement Y", f, "ty"), exprField("Déplacement Z", f, "tz"));
+    // Taille réelle, réglable dans chaque direction (pour allonger ou épaissir un modèle téléchargé)
+    const box = impBox(f);
+    if (box && f.format === "stl") {
+      const sc = Number(String(f.scale || 1).replace(",", ".")) || 1;
+      const k = (a) => Number(String(f[a] ?? 1).replace(",", ".")) || 1;
+      const AX = [["sx", "Longueur (X)", 0], ["sy", "Largeur (Y)", 1], ["sz", "Hauteur (Z)", 2]];
+      add(h("h2", {}, "Taille"));
+      for (const [key, label, i] of AX) {
+        const cur = box[i] * sc * k(key);
+        add(h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" },
+          h("input", { type: "number", step: "0.1", min: "0.01", value: Math.round(cur * 100) / 100, "data-size": key,
+            onchange: (e) => {
+              const val = Number(String(e.target.value).replace(",", ".")); if (!(val > 0)) return;
+              const r = val / (box[i] * sc);
+              mutate(() => {
+                if (f.keep) { const ratio = r / k(key); for (const [o] of AX) f[o] = String(Math.round(k(o) * ratio * 1e5) / 1e5); }
+                else f[key] = String(Math.round(r * 1e5) / 1e5);
+              });
+              renderProps();
+            } }), h("span", { class: "unit" }, "mm"),
+          h("span", { class: "unit", style: "min-width:46px;text-align:right" }, `${Math.round(k(key) * sc * 100)} %`))));
+      }
+      add(checkField("Garder les proportions", f, "keep"));
+      if (["sx", "sy", "sz"].some((a) => k(a) !== 1) || sc !== 1) add(h("div", { class: "btnrow" }, h("button", { class: "btn", onclick: () => { mutate(() => { delete f.sx; delete f.sy; delete f.sz; f.scale = "1"; }); renderProps(); } }, "Taille d’origine")));
+    } else add(exprField("Échelle", f, "scale", "×", { step: 0.1 }));
+    add(h("h2", {}, "Rotation"), exprField("Autour de X", f, "rx", "°", { step: 90 }), exprField("Autour de Y", f, "ry", "°", { step: 90 }), exprField("Autour de Z", f, "rz", "°", { step: 90 }));
+    add(h("h2", {}, "Position"), exprField("Déplacement X", f, "tx"), exprField("Déplacement Y", f, "ty"), exprField("Déplacement Z", f, "tz"));
     if (f.format === "stl") add(h("div", { class: "note" }, "Un STL est un maillage : les congés et perçages fonctionnent mal dessus. Préfère le STEP quand tu l’as."));
   }
   if (f.type !== "sketch") add(h("div", { class: "note" }, "Tout s’applique en direct. Entrée ou ✓ pour valider, Échap ou ✕ pour annuler."));
@@ -929,6 +1007,21 @@ function renderProps() {
     h("button", { class: "btn danger", onclick: () => deleteFeature(f.id) }, "Supprimer"),
     h("button", { class: "btn ghost", title: "Met l’étape en pause sans la supprimer (pour comparer avec et sans)", onclick: () => mutate(() => { f.suppressed = !f.suppressed; }) || renderProps() }, f.suppressed ? "Réactiver" : "Mettre en pause")));
   void vars;
+}
+
+// Dimensions d'origine d'un STL importé (lues une fois dans le fichier).
+const impBoxes = new Map();
+function impBox(f) {
+  if (f.format !== "stl" || !f.data) return null;
+  const key = f.id + ":" + f.data.length; if (impBoxes.has(key)) return impBoxes.get(key);
+  let box = null;
+  try {
+    const bin = atob(f.data); const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const t = readStl(u8); const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < t.length; i += 3) for (let c = 0; c < 3; c++) { if (t[i + c] < lo[c]) lo[c] = t[i + c]; if (t[i + c] > hi[c]) hi[c] = t[i + c]; }
+    box = [0, 1, 2].map((c) => hi[c] - lo[c]);
+  } catch { box = null; }
+  impBoxes.set(key, box); return box;
 }
 
 // ---------- Contraintes d'esquisse ----------
@@ -1432,13 +1525,34 @@ function renderStatus() {
   if (errCount) s.append(h("span", { style: "color:var(--err)" }, `${errCount} étape(s) en erreur`));
   if (st.stopAt !== null) s.append(h("span", { style: "color:var(--blue)" }, "Historique remonté"));
   if (st.lastMs) s.append(h("span", {}, `Calcul ${nf(st.lastMs / 1000, 2)} s`));
-  s.append(h("button", { class: "ver", title: "Version installée. Clique pour chercher une mise à jour.", onclick: () => checkUpdate() }, `v${typeof GABARIT_VERSION === "string" ? GABARIT_VERSION : "?"}`));
+  s.append(h("span", { class: "ver" }, `v${APP_V}`),
+    h("button", { class: "upd" + (st.newVersion ? " new" : ""), title: st.newVersion ? `La version ${st.newVersion} est disponible` : "Chercher une mise à jour et relancer Gabarit", onclick: () => checkUpdate() }, st.newVersion ? `Mettre à jour (v${st.newVersion})` : "Mettre à jour"));
 }
+const APP_V = typeof GABARIT_VERSION === "string" ? GABARIT_VERSION : "?";
+// Version publiée en ligne (lue dans sw.js, sans passer par le cache).
+async function onlineVersion() {
+  try { const t = await (await fetch("sw.js?v=" + Date.now(), { cache: "no-store" })).text(); return (/VERSION = "([\d.]+)/.exec(t) || [])[1] || null; } catch { return null; }
+}
+const newer = (a, b) => { const x = a.split(".").map(Number), y = b.split(".").map(Number); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+async function watchVersion() {
+  if (location.protocol !== "https:" && location.hostname !== "localhost") return;
+  const v = await onlineVersion();
+  if (v && APP_V !== "?" && newer(v, APP_V) && st.newVersion !== v) { st.newVersion = v; renderStatus(); }
+}
+// Bouton « Mettre à jour » : télécharge la dernière version puis relance Gabarit (ton travail est gardé).
 async function checkUpdate() {
-  toast("Recherche d’une mise à jour…");
-  try { const r = await navigator.serviceWorker?.getRegistration(); await r?.update(); } catch { /* hors ligne */ }
-  setTimeout(() => { save(); location.reload(); }, 1200);
+  if (location.protocol === "file:") { toast("Version hors ligne (fichier) : télécharge le nouveau Gabarit.html pour mettre à jour."); return; }
+  showBusy(true, "Mise à jour…");
+  const v = await onlineVersion();
+  if (v && !newer(v, APP_V) && v === APP_V) { showBusy(false); toast(`Tu as déjà la dernière version (v${APP_V}).`); return; }
+  save(); stashActive(); saveTabs();
+  try {
+    await Promise.all(["./", "index.html", "app.js", "worker.js", "style.css"].map((f) => fetch(f + "?v=" + Date.now(), { cache: "reload" }).catch(() => {})));
+    const r = await navigator.serviceWorker?.getRegistration(); await r?.update();
+  } catch { /* hors ligne */ }
+  setTimeout(() => location.reload(), 900);
 }
+setTimeout(watchVersion, 5000); setInterval(watchVersion, 20 * 60 * 1000);
 
 // ---------- Divers ----------
 let toastTimer;
@@ -1465,13 +1579,13 @@ function welcome(show) {
       h("p", {}, "Ton atelier de conception 3D, gratuit et sans compte."),
       h("div", { class: "btnrow" },
         cur ? h("button", { class: "btn primary", onclick: () => go(() => {}) }, `Continuer : ${cur}`) : null,
-        h("button", { class: "btn" + (cur ? "" : " primary"), onclick: () => go(() => { loadDoc(emptyDoc()); toolAction("sketch"); }) }, "Nouvelle pièce"),
-        h("button", { class: "btn", onclick: () => go(() => loadDoc(emptyAsm())) }, "Nouvel assemblage"),
+        h("button", { class: "btn" + (cur ? "" : " primary"), onclick: () => go(() => { openTab(emptyDoc()); toolAction("sketch"); }) }, "Nouvelle pièce"),
+        h("button", { class: "btn", onclick: () => go(() => openTab(emptyAsm())) }, "Nouvel assemblage"),
         h("button", { class: "btn", onclick: () => go(() => $("#fileIn").click()) }, "Ouvrir un fichier"),
-        h("button", { class: "btn ghost", onclick: () => go(() => loadDoc(exampleDoc())) }, "Voir l’exemple")),
+        h("button", { class: "btn ghost", onclick: () => go(() => openTab(exampleDoc())) }, "Voir l’exemple")),
       names.length ? h("div", { class: "recents" }, h("h2", {}, "Mes pièces"),
         ...names.map((n) => h("div", { class: "rec" },
-          h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => loadDoc(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
+          h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => openTab(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
           h("button", { class: "rec-del", title: `Supprimer « ${n} »`, "aria-label": `Supprimer ${n}`, onclick: () => { if (!deletePart(n)) return; draw(); } }, "Supprimer")))) : null));
     typoTree(w);
   };
@@ -1512,7 +1626,7 @@ async function openFile(file) {
   if (MESH_EXT.test(file.name)) {
     // fichier d'impression 3D ou de CAO : nouvelle pièce qui le reprend
     const dlg = $("#dlg"); if (dlg?.open) dlg.close();
-    if (isAsm() || doc.features.length) { save(); loadDoc(emptyDoc()); }
+    if (!isBlank(doc)) openTab(emptyDoc());
     doc.name = file.name.replace(/\.[^.]+$/, ""); $("#docName").value = doc.name;
     await importBlob(file); return;
   }
@@ -1520,7 +1634,7 @@ async function openFile(file) {
     const d = JSON.parse(await file.text());
     if (!Array.isArray(d.features) && d.kind !== "assembly") throw new Error();
     if (d.kind === "assembly") d.features = d.features || [];
-    if (!isAsm() || d.kind === "assembly") { loadDoc(d); toast(`« ${d.name || file.name} » ouvert${d.kind === "assembly" ? "" : "e"}.`); }
+    if (!isAsm() || d.kind === "assembly") { openTab(d); toast(`« ${d.name || file.name} » ouvert${d.kind === "assembly" ? "" : "e"}.`); }
     else { addToLibrary(d); toast(`« ${d.name || file.name} » ajoutée à ta bibliothèque : clique sur « Insérer une pièce ».`); }
   } catch { toast("Ce fichier n’est pas une pièce Gabarit valide."); }
 }
@@ -1631,7 +1745,7 @@ const asmUI = createAssemblyUI({
 });
 const extras = createExtras({
   h, $, fr, nf, toast, viewer, st, markTool,
-  getDoc: () => doc, loadDoc: (d) => { welcome(false); loadDoc(d); }, mutate, renderParams, renderProps,
+  getDoc: () => doc, loadDoc: (d) => { welcome(false); openTab(d); }, replaceDoc: (d) => { welcome(false); loadDoc(d); }, mutate, renderParams, renderProps,
   setPrintDown: (g) => { if (g) doc.printDown = g; else delete doc.printDown; pushHistory(); },
   commands: () => commandList(),
 });
@@ -1672,7 +1786,7 @@ function commandList() {
 }
 function newDialog() {
   const dlg = $("#dlg"); dlg.innerHTML = "";
-  const go = (d) => { dlg.close(); loadDoc(d); if (!d.kind) toolAction("sketch"); };
+  const go = (d) => { dlg.close(); openTab(d); if (!d.kind) toolAction("sketch"); };
   dlg.append(h("div", { class: "dh" }, "Nouveau"), h("div", { class: "db" },
     h("p", {}, "Ton travail actuel reste dans ta bibliothèque (les pièces) ; pense à l’enregistrer en fichier si tu veux le garder ailleurs."),
     h("div", { class: "planes" },
@@ -1709,7 +1823,7 @@ function libraryDialog() {
     dlg.innerHTML = "";
     dlg.append(h("div", { class: "dh" }, "Mes pièces"), h("div", { class: "db" },
       names.length ? h("table", { class: "bom" }, names.map((n) => h("tr", {}, h("td", {}, h("b", {}, n)), h("td", {}, `${lib[n].features.length} étape(s)`),
-        h("td", {}, h("button", { class: "btn", onclick: () => { dlg.close(); loadDoc(lib[n]); } }, "Ouvrir")),
+        h("td", {}, h("button", { class: "btn", onclick: () => { dlg.close(); openTab(lib[n]); } }, "Ouvrir")),
         h("td", {}, h("button", { class: "btn danger", onclick: () => { if (deletePart(n)) draw(); } }, "Supprimer")))))
         : h("p", {}, "Ta bibliothèque est vide. Chaque pièce que tu crées y est rangée automatiquement.")),
     h("div", { class: "df" }, h("button", { class: "btn primary", onclick: () => dlg.close() }, "Fermer")));
@@ -1821,6 +1935,10 @@ if ("serviceWorker" in navigator && location.protocol === "https:" && !window.GA
 let saved = null; try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch { saved = null; }
 const hasSaved = saved && (saved.kind === "assembly" || (Array.isArray(saved.features) && (saved.features.length || saved.params?.length)));
 if (hasSaved) loadDoc(saved); else loadDoc(emptyDoc());
+// onglets : le document actif est celui enregistré en dernier
+tabs.list = tabs.list.filter((t) => t && t.id);
+if (!tabs.list.some((t) => t.id === tabs.active)) { const id = newId("t"); tabs.list.push({ id, name: doc.name }); tabs.active = id; saveTabs(); }
+renderTabs();
 if (!location.hash.startsWith("#p=")) welcome(true);
 typoTree(document.body);
 startWorker();

@@ -9,7 +9,7 @@ html, body { -webkit-user-select: none; user-select: none; margin: 0; height: 10
 button { font: inherit; color: inherit; cursor: pointer; }
 input, select { font: inherit; color: inherit; -webkit-user-select: text; user-select: text; }
 dialog .db { -webkit-user-select: text; user-select: text; }
-#app { display: grid; grid-template-rows: auto auto 1fr auto; height: 100vh; height: 100dvh; }
+#app { display: grid; grid-template-rows: auto auto auto 1fr auto; height: 100vh; height: 100dvh; }
 .top { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--ink); color: #fff; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 17px; letter-spacing: .2px; }
 .doc-name { flex: 1; min-width: 80px; max-width: 360px; background: transparent; border: 1px solid transparent; color: #fff; border-radius: 6px; padding: 5px 8px; }
@@ -280,8 +280,6 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .welcome .rec-open span { color: var(--muted); font-size: 12.5px; }
 .welcome .rec-del { background: none; border: 1px solid transparent; color: var(--err); border-radius: 7px; padding: 4px 9px; font-size: 12.5px; cursor: pointer; }
 .welcome .rec-del:hover { border-color: var(--err); background: #fdecea; }
-.status .ver { border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 0 4px; }
-.status .ver:hover { color: var(--accent); text-decoration: underline; }
 /* v0.9.2 : façons de tracer, centres de la pièce, contraintes près du pointeur */
 .sketch .ref-ctr { stroke: #2a7bd1; stroke-width: 1.4; fill: none; pointer-events: none; }
 .sk-method { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; padding: 4px; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 2px 8px #0002; z-index: 5; }
@@ -301,3 +299,17 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .skm span { display: inline-flex; width: 22px; height: 22px; }
 .skm span svg { width: 22px; height: 22px; }
 .skm.on { border-color: var(--accent, #c4552b); background: #fbeee8; color: #8a3517; font-weight: 600; }
+/* Onglets de pièces */
+.tabs { display: flex; align-items: flex-end; gap: 2px; padding: 4px 10px 0; background: #e9e6e1; border-bottom: 1px solid var(--line); overflow-x: auto; min-height: 34px; }
+.tab { display: flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 6px 5px 12px; background: #dcd8d1; border: 1px solid var(--line); border-bottom: 0; border-radius: 7px 7px 0 0; font-size: 13px; color: var(--ink2); cursor: pointer; white-space: nowrap; }
+.tab .nm { overflow: hidden; text-overflow: ellipsis; }
+.tab.on { background: var(--card); color: var(--ink); font-weight: 600; margin-bottom: -1px; padding-bottom: 6px; }
+.tab:hover:not(.on) { background: #e3dfd9; }
+.tab .x { border: 0; background: none; width: 20px; height: 20px; border-radius: 4px; font-size: 11px; color: var(--ink2); cursor: pointer; padding: 0; }
+.tab .x:hover { background: #0001; color: #b3261e; }
+.tab-new { border: 0; background: none; font-size: 18px; line-height: 1; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; color: var(--ink2); margin-bottom: 2px; }
+.tab-new:hover { background: #0000000f; color: var(--ink); }
+.status .ver { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.status .upd { border: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 5px; cursor: pointer; margin-left: 4px; }
+.status .upd:hover { border-color: var(--accent, #c4552b); color: var(--accent, #c4552b); }
+.status .upd.new { background: var(--accent, #c4552b); border-color: var(--accent, #c4552b); color: #fff; font-weight: 600; }
