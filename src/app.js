@@ -744,7 +744,7 @@ function addParam() {
 function exprField(label, obj, key, unit = "mm", opts = {}) {
   const v = varsMap(doc.params);
   const calc = h("div", { class: "calc" });
-  const input = h("input", { type: "text", value: obj[key] ?? "", spellcheck: "false", inputmode: "decimal" });
+  const input = h("input", { type: "text", value: obj[key] ?? opts.def ?? "", spellcheck: "false", inputmode: "decimal" });
   const check = () => {
     const raw = input.value;
     if (opts.optional && !raw.trim()) { input.classList.remove("bad"); calc.classList.remove("bad"); calc.textContent = ""; input.placeholder = opts.optional; return; }
@@ -983,7 +983,7 @@ function renderProps() {
       for (const [key, label, i] of AX) {
         const cur = box[i] * sc * k(key);
         add(h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" },
-          h("input", { type: "number", step: "0.1", min: "0.01", value: Math.round(cur * 100) / 100, "data-size": key,
+          h("input", { type: "text", inputmode: "decimal", value: String(Math.round(cur * 100) / 100).replace(".", ","), "data-size": key,
             onchange: (e) => {
               const val = Number(String(e.target.value).replace(",", ".")); if (!(val > 0)) return;
               const r = val / (box[i] * sc);
@@ -993,12 +993,12 @@ function renderProps() {
               });
               renderProps();
             } }), h("span", { class: "unit" }, "mm"),
-          h("span", { class: "unit", style: "min-width:46px;text-align:right" }, `${Math.round(k(key) * sc * 100)} %`))));
+h("span", { class: "unit pct" }, `${Math.round(k(key) * sc * 100)} %`))));
       }
       add(checkField("Garder les proportions", f, "keep"));
       if (["sx", "sy", "sz"].some((a) => k(a) !== 1) || sc !== 1) add(h("div", { class: "btnrow" }, h("button", { class: "btn", onclick: () => { mutate(() => { delete f.sx; delete f.sy; delete f.sz; f.scale = "1"; }); renderProps(); } }, "Taille d’origine")));
     } else add(exprField("Échelle", f, "scale", "×", { step: 0.1 }));
-    add(h("h2", {}, "Rotation"), exprField("Autour de X", f, "rx", "°", { step: 90 }), exprField("Autour de Y", f, "ry", "°", { step: 90 }), exprField("Autour de Z", f, "rz", "°", { step: 90 }));
+    add(h("h2", {}, "Rotation"), exprField("Autour de X", f, "rx", "°", { step: 90, def: "0" }), exprField("Autour de Y", f, "ry", "°", { step: 90, def: "0" }), exprField("Autour de Z", f, "rz", "°", { step: 90, def: "0" }));
     add(h("h2", {}, "Position"), exprField("Déplacement X", f, "tx"), exprField("Déplacement Y", f, "ty"), exprField("Déplacement Z", f, "tz"));
     if (f.format === "stl") add(h("div", { class: "note" }, "Un STL est un maillage : les congés et perçages fonctionnent mal dessus. Préfère le STEP quand tu l’as."));
   }

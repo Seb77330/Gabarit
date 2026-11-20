@@ -313,3 +313,4 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .status .upd { border: 1px solid var(--line); background: #fff; color: var(--ink); font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 5px; cursor: pointer; margin-left: 4px; }
 .status .upd:hover { border-color: var(--accent, #c4552b); color: var(--accent, #c4552b); }
 .status .upd.new { background: var(--accent, #c4552b); border-color: var(--accent, #c4552b); color: #fff; font-weight: 600; }
+.field .unit.pct { min-width: 44px; text-align: right; white-space: nowrap; }
