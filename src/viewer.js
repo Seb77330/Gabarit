@@ -177,6 +177,7 @@ export class Viewer {
     if (!this.pickMode) return;
     this.clearHover();
     if (this.pickMode.kind === "measure") return;
+    if (this.pickMode.kind === "region") { const h = this.hitRegion(e); for (const o of this.regionObjs) if (!o.userData.on) o.material.opacity = 0.12; if (h) { const o = this.regionObjs[h.region]; if (!o.userData.on) o.material.opacity = 0.3; } return; }
     if (this.pickMode.kind === "asm") {
       const h = this.asmHit(e);
       if (h && this.pickMode.filter?.(h) !== false) { const a = this.asm.get(h.comp); const g = a.data.faceGroups.find((x) => x.faceId === h.faceId); if (g) { const geo = new THREE.BufferGeometry(); geo.setAttribute("position", a.mesh.geometry.getAttribute("position")); geo.setIndex(new THREE.BufferAttribute(a.data.triangles.slice(g.start, g.start + g.count), 1)); this.hoverObj = new THREE.Mesh(geo, this.hoverMat); a.g.add(this.hoverObj); this.hoverParent = a.g; } }
@@ -242,6 +243,25 @@ export class Viewer {
     g.add(new THREE.LineSegments(eg, this.ghostEdge));
     g.renderOrder = 2; this.ghost = g; this.scene.add(g);
   }
+  // Zones d'une esquisse (contours qui se croisent) : on clique celles à extruder.
+  setRegions(list, sel = []) {
+    if (this.regionGroup) { this.scene.remove(this.regionGroup); this.regionGroup.traverse((o) => o.geometry?.dispose()); this.regionGroup = null; }
+    this.regionObjs = [];
+    if (!list) return;
+    const g = new THREE.Group();
+    list.forEach((tris, i) => {
+      const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(tris, 3));
+      const on = sel.includes(i);
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: on ? 0xc4552b : 0x2f6fb5, transparent: true, opacity: on ? 0.55 : 0.12, side: THREE.DoubleSide, depthTest: false, depthWrite: false }));
+      m.userData.region = i; m.userData.on = on; m.renderOrder = 8; g.add(m); this.regionObjs.push(m);
+    });
+    this.regionGroup = g; this.scene.add(g);
+  }
+  hitRegion(e) {
+    if (!this.regionObjs?.length) return null;
+    this.ray(e); const h = this.raycaster.intersectObjects(this.regionObjs)[0];
+    return h ? { region: h.object.userData.region, point: h.point.toArray() } : null;
+  }
   // Face mise en évidence (clic simple, hors outil).
   highlightFace(faceId) {
     if (this.selFaceObj) { this.part.remove(this.selFaceObj); this.selFaceObj = null; }
@@ -253,6 +273,7 @@ export class Viewer {
     if (!this.pickMode) { this.onFreeClick?.(e); return; }
     if (this.pickMode.kind === "asm") { const h = this.asmHit(e); if (h) this.pickMode.onPick(h); return; }
     if (this.pickMode.kind === "measure") { const h = this.hitFace(e) || this.hitEdge(e); if (h) this.pickMode.onPick({ ...h, ...this.snapPoint(e, h.point) }); return; }
+    if (this.pickMode.kind === "region") { const h = this.hitRegion(e); if (h) this.pickMode.onPick(h); return; }
     if (this.pickMode.kind === "edge") { const h = this.hitEdge(e); if (h) this.pickMode.onPick(h); }
     else { const h = this.hitFace(e); if (h) this.pickMode.onPick(h); }
   }

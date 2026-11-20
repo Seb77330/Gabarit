@@ -34,6 +34,10 @@ const { chromium } = require("playwright");
   console.log("dxf", dl.suggestedFilename(), txt.length, (txt.match(/POLYLINE/g) || []).length, "polylines");
   await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=extrude]");
+  await p.waitForTimeout(500);
+  // la courbe et sa symétrie se croisent : Gabarit demande les zones ; Entrée = tous les contours
+  console.log("demande des zones", await G(() => window.gabarit.st.pick?.kind));
+  if (await G(() => window.gabarit.st.pick?.kind === "regions")) await p.keyboard.press("Enter");
   await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 60000 });
   console.log("vol", await G(() => [Math.round(window.gabarit.st.mesh.volume), window.gabarit.st.errors]));
   for (const k of ["3mf", "obj"]) {
