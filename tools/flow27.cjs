@@ -13,7 +13,7 @@ const { chromium } = require("playwright");
   const setHk = async (key, val) => { const i = p.locator(`#props [data-hk="${key}"]`); await i.fill(String(val)); await p.waitForTimeout(150); };
   await p.goto("http://localhost:8765/?mode=expert");
   await p.waitForSelector("#welcome .defis");
-  const cards = await p.locator("#welcome [data-defi]").allInnerTexts();
+  const cards = (await p.locator("#welcome [data-defi]").allInnerTexts()).map((t) => t.replace(/\u2060/g, ""));
   ok(cards.length === 3 && /porte-clés/.test(cards[0]) && /boîte/i.test(cards[1]) && /prénom/.test(cards[2]), "accueil : 3 mini-défis proposés");
   await p.screenshot({ path: "/tmp/claude-0/shots/v12-accueil.png" });
 
