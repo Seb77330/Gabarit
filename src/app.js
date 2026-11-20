@@ -140,7 +140,7 @@ function loadDoc(d, fit = true) {
   if (isAsm()) {
     closeSketch(true); stopPick(); viewer.setPick(null); banner(null); st.mesh = null; viewer.setCog(null); if (viewer.section) toggleSection();
     hist = []; hidx = -1; pushHistory();
-    $("#docName").value = doc.name; asmUI.enter(); return;
+    $("#docName").value = doc.name; layoutMode(); asmUI.enter(); return;
   }
   if (wasAsm) { renderTools(); viewer.setMesh(null); viewer.setPick(null); banner(null); if (viewer.section) toggleSection(); }
   st.sel = null; st.stopAt = null; st.errors = {}; closeSketch(true); stopPick();
@@ -191,7 +191,7 @@ function onWorker(m) {
     if (m.req !== buildReq) return;
     // pendant une sélection, la pièce affichée s'arrête avant l'étape : on calcule en plus l'aperçu du résultat
     const pf = st.pick?.featId ? feat(st.pick.featId) : null;
-    if (pf && ["fillet", "chamfer", "shell", "draft"].includes(pf.type) && !pf.suppressed) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
+    if (pf && ["fillet", "chamfer", "shell", "draft"].includes(pf.type) && !pf.suppressed && (pf.edges || pf.faces || []).length) worker.postMessage({ type: "build", req: buildReq, preview: true, doc, stopAt: featIndex(pf.id) + 1 });
     else viewer.setGhost(null);
     st.building = false; showBusy(false);
     if (m.heap > 1.4e9) setTimeout(restartWorker, 50); // libère la mémoire du noyau
@@ -287,7 +287,20 @@ const TOOL_TIPS = {
   drawing: "Créer le plan 2D de la pièce, à imprimer ou en PDF",
   print: "Voir les surplombs à soutenir et poser la pièce à plat automatiquement",
 };
+// Coin de confirmation dans la vue : ✓ / ✕ toujours au même endroit.
+function renderCorner() {
+  let c = $("#corner");
+  const on = !isAsm() && (st.editSketch || (st.sel && feat(st.sel) && feat(st.sel).type !== "sketch"));
+  if (!on) { c?.remove(); return; }
+  if (!c) { c = h("div", { id: "corner", class: "corner" }); $(".stage").append(c); }
+  c.innerHTML = "";
+  c.append(
+    h("button", { class: "ok", title: st.editSketch ? "Sortir de l’esquisse (Entrée)" : "Valider (Entrée)", onclick: () => (st.editSketch ? closeSketch() : validateFeature()) }, "✓"),
+    h("button", { class: "ko", title: st.editSketch ? "Annuler l’esquisse (oublier les changements)" : "Annuler les changements (Échap)", onclick: () => (st.editSketch ? cancelSketch() : cancelFeature()) }, "✕"));
+}
+let lastTool = null;
 function toolAction(k) {
+  if (!["measure", "section", "drawing", "print", "import"].includes(k)) lastTool = k;
   if (engineFailed && !["sketch", "plane", "measure", "section"].includes(k)) toast("Le moteur 3D n’a pas démarré dans cet aperçu : ouvre Gabarit.html dans Chrome, Edge ou Firefox pour créer des volumes.");
   if (st.editSketch) {
     if (["measure", "section"].includes(k)) { toast("Mesure et coupe : sors d’abord de l’esquisse."); return; }
@@ -368,11 +381,12 @@ function toolAction(k) {
 }
 function nextNameRaw(base) { let n = 1; const names = new Set(doc.features.map((f) => f.name)); while (names.has(`${base} ${n}`)) n++; return `${base} ${n}`; }
 function insertFeature(f) {
+  const snap = JSON.stringify(doc);
   mutate((d) => {
     if (st.stopAt !== null) { d.features.splice(st.stopAt, 0, f); st.stopAt++; }
     else d.features.push(f);
   });
-  select(f.id);
+  select(f.id); st.editStart = { id: f.id, snap, isNew: true };
 }
 function candidateSketch() {
   const s = feat(st.sel); if (s?.type === "sketch") return s;
@@ -430,12 +444,18 @@ function startPick(kind, featId) {
     cyl: "Clique sur la face cylindrique à fileter : un axe (vis) ou l’intérieur d’un trou (taraudage).",
     upto: "Clique sur la face plane où l’extrusion doit s’arrêter.",
   };
-  banner(texts[kind], [["✓ Valider (Entrée)", () => validateFeature()]]);
+  banner(texts[kind]);
   viewer.setPick({ kind: kind === "edges" ? "edge" : "face", onPick: (hit) => onPick(hit) });
   requestBuild(0); renderProps(); refreshMarkers();
 }
 // Valider l'étape en cours (bouton, bandeau ou touche Entrée).
 let validatedOnce = false;
+// ✕ : revient à l'état d'avant l'édition (une étape toute neuve disparaît).
+function cancelFeature() {
+  const es = st.editStart; stopPick(false);
+  if (es && es.snap !== JSON.stringify(doc)) { doc = JSON.parse(es.snap); pushHistory(); save(); requestBuild(0); }
+  st.editStart = null; select(null); renderAll();
+}
 function validateFeature() {
   stopPick(); select(null);
   if (!validatedOnce) { validatedOnce = true; toast("C’est validé. Clique sur l’étape à gauche pour la modifier plus tard."); }
@@ -505,6 +525,8 @@ function banner(text, buttons = []) {
 // ---------- Arbre de construction ----------
 function select(id) {
   if (st.pick && st.pick.featId !== id) stopPick();
+  if (id && st.editStart?.id !== id) st.editStart = { id, snap: JSON.stringify(doc) };
+  if (!id) st.editStart = null;
   st.sel = id; renderTree(); renderProps(); renderOverlay(); refreshMarkers();
 }
 function renderTree() {
@@ -687,12 +709,17 @@ function sketchOptions(f) {
 }
 function renderProps() {
   const P = $("#props"); P.innerHTML = "";
+  layoutMode();
   if (st.editSketch) { renderSketchProps(P); return; }
   const f = feat(st.sel);
   if (!f) {
     P.append(h("h2", {}, "Réglages"), h("div", { class: "note" }, "Clique sur une étape de l’historique pour la modifier. Toutes les cotes acceptent des calculs et des paramètres, par exemple ", h("b", {}, "longueur/2 + 3"), "."));
     return;
   }
+  P.append(h("div", { class: "okbar" },
+    h("button", { class: "ok", title: "Valider (Entrée)", "aria-label": "Valider", onclick: () => validateFeature() }, "✓"),
+    h("button", { class: "ko", title: "Annuler les changements (Échap)", "aria-label": "Annuler", onclick: () => cancelFeature() }, "✕"),
+    h("span", { class: "lbl" }, TYPES[f.type].label || "")));
   const head = h("div", { class: "head" }, h("span", { class: "ic", html: ICONS[TYPES[f.type].icon] }),
     h("input", { value: f.name, "aria-label": "Nom de l’étape", onchange: (e) => { mutate(() => { f.name = e.target.value.trim() || f.name; }); } }));
   P.append(head);
@@ -840,9 +867,8 @@ function renderProps() {
     add(exprField("Échelle", f, "scale", "×", { step: 0.1 }), exprField("Déplacement X", f, "tx"), exprField("Déplacement Y", f, "ty"), exprField("Déplacement Z", f, "tz"));
     if (f.format === "stl") add(h("div", { class: "note" }, "Un STL est un maillage : les congés et perçages fonctionnent mal dessus. Préfère le STEP quand tu l’as."));
   }
-  if (f.type !== "sketch") add(h("div", { class: "note" }, "Tout s’applique en direct. Entrée ou « Valider » pour finir, Échap pour fermer."));
+  if (f.type !== "sketch") add(h("div", { class: "note" }, "Tout s’applique en direct. Entrée ou ✓ pour valider, Échap ou ✕ pour annuler."));
   add(h("div", { class: "btnrow", style: "margin-top:6px" },
-    f.type !== "sketch" ? h("button", { class: "btn primary", onclick: () => validateFeature() }, "✓ Valider") : null,
     h("button", { class: "btn danger", onclick: () => deleteFeature(f.id) }, "Supprimer"),
     h("button", { class: "btn ghost", title: "Met l’étape en pause sans la supprimer (pour comparer avec et sans)", onclick: () => mutate(() => { f.suppressed = !f.suppressed; }) || renderProps() }, f.suppressed ? "Réactiver" : "Mettre en pause")));
   void vars;
@@ -931,12 +957,19 @@ const SK_HINTS = {
 let sketcher;
 function openSketch(id, isNew = false) {
   stopPick(false); clearFaceSel();
-  st.editSketch = id; st.sel = id; st.skSel = null; st.skNew = isNew;
+  st.editSketch = id; st.sel = id; st.skSel = null; st.skNew = isNew; st.skSnap = JSON.stringify(doc);
   $("#sketch").hidden = false; $("#views").hidden = true; banner(null);
   sketcher.sel = null; sketcher.setTool(isNew ? "rect" : "select");
   updateSketchRefs();
   requestAnimationFrame(() => sketcher.fitView());
   renderTree(); renderProps(); requestBuild(0);
+}
+// ✕ de l'esquisse : oublie les changements faits depuis l'ouverture.
+function cancelSketch() {
+  const id = st.editSketch, isNew = st.skNew, snap = st.skSnap;
+  st.afterSketch = null; closeSketch(true);
+  if (snap) { doc = JSON.parse(snap); if (isNew) doc.features = doc.features.filter((f) => f.id !== id); pushHistory(); save(); }
+  st.sel = null; renderAll(); requestBuild(0);
 }
 function closeSketch(silent) {
   if (!st.editSketch) return;
@@ -1004,6 +1037,10 @@ function renderSketchTools() {
 const ENT_LABELS = { rect: "Rectangle", circle: "Cercle", polygon: "Polygone", slot: "Rainure", poly: "Contour libre", path: "Chemin", point: "Point", ellipse: "Ellipse", spline: "Courbe", text: "Texte" };
 function renderSketchProps(P) {
   const f = feat(st.editSketch); if (!f) return;
+  P.append(h("div", { class: "okbar" },
+    h("button", { class: "ok", title: "Sortir de l’esquisse (Entrée)", "aria-label": "Valider", onclick: () => closeSketch() }, "✓"),
+    h("button", { class: "ko", title: "Annuler l’esquisse (oublier les changements)", "aria-label": "Annuler", onclick: () => cancelSketch() }, "✕"),
+    h("span", { class: "lbl" }, st.afterLabel ? `✓ = ${st.afterLabel}` : "Esquisse")));
   P.append(h("div", { class: "head" }, h("span", { class: "ic", html: ICONS.sketch }), h("input", { value: f.name, onchange: (e) => mutate(() => { f.name = e.target.value.trim() || f.name; }) })));
   P.append(...planeFields(f));
   const ents = f.entities || [];
@@ -1255,7 +1292,12 @@ function renderStatus() {
 let toastTimer;
 function toast(msg) { const t = $("#toast"); t.textContent = fr(msg); t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3800); }
 function showBusy(on, text = "Calcul…") { const b = $("#busy"); b.hidden = !on; if (on) b.lastChild.textContent = fr(text); }
-function renderAll() { if (isAsm()) { $("#docName").value = doc.name; asmUI.render(); return; } $("#docName").value = doc.name; renderTree(); renderParams(); renderProps(); renderStatus(); renderOverlay(); refreshMarkers(); }
+function layoutMode() {
+  const M = document.querySelector("main");
+  M.classList.toggle("asm", isAsm()); M.classList.toggle("editing", !isAsm() && !!(st.editSketch || feat(st.sel)));
+  renderCorner();
+}
+function renderAll() { layoutMode(); if (isAsm()) { $("#docName").value = doc.name; asmUI.render(); return; } $("#docName").value = doc.name; renderTree(); renderParams(); renderProps(); renderStatus(); renderOverlay(); refreshMarkers(); }
 
 function welcome(show) {
   const w = $("#welcome"); if (!show) { w.hidden = true; return; }
@@ -1315,6 +1357,55 @@ function refPoint(point) {
 }
 function clearFaceSel() { st.facePlane = null; st.pre = { edges: [], faces: [] }; viewer.highlightFace(null); $("#faceAct")?.remove(); refreshMarkers(); }
 function preAction(fn) { const pre = st.pre, pl = st.facePlane; clearFaceSel(); fn(pre, pl); }
+// Menu du clic droit dans la vue 3D : actions selon ce qui est sous la souris.
+viewer.onContext = (e) => {
+  closeMenu();
+  if (st.editSketch || isAsm()) return;
+  const items = [];
+  const fh = st.mesh && !viewer.pickMode ? viewer.hitFace(e) : null;
+  const eh = st.mesh && !viewer.pickMode ? viewer.hitEdge(e) : null;
+  const B = (label, fn, cls) => h("button", { class: cls || "", onclick: () => { closeMenu(); fn(); } }, label);
+  if (eh) {
+    items.push(B("Congé sur cette arête", () => { st.pre = { edges: [refPoint(eh.point)], faces: [] }; toolAction("fillet"); }));
+    items.push(B("Chanfrein sur cette arête", () => { st.pre = { edges: [refPoint(eh.point)], faces: [] }; toolAction("chamfer"); }));
+    items.push(h("hr"));
+  } else if (fh) {
+    if (fh.info?.plane) {
+      const pl = planeFromFace(fh.info);
+      items.push(B("✎ Esquisser sur cette face", () => createSketch(pl), "strong"));
+      items.push(B("Percer sur cette face", () => { st.facePlane = pl; toolAction("hole"); }));
+      items.push(B("Plan décalé depuis cette face", () => insertFeature({ id: newId("f"), type: "plane", name: nextName("plane"), base: pl, offset: "10", rot: "x", angle: "0" })));
+      items.push(B("Normal à (vue de face)", () => viewer.fit(fh.info.n)));
+    }
+    items.push(B("Coque en ouvrant cette face", () => { st.pre = { edges: [], faces: [{ id: fh.faceId, p: refPoint(fh.point), info: fh.info }] }; toolAction("shell"); }));
+    items.push(h("hr"));
+  }
+  if (lastTool) items.push(B(`Répéter : ${toolLabel(lastTool)} (Entrée)`, () => toolAction(lastTool)));
+  items.push(B("Esquisse…", () => toolAction("sketch")));
+  items.push(B("Recadrer (F)", () => viewer.fit()));
+  items.push(B("Mesurer", () => toolAction("measure")));
+  items.push(B("Coupe", () => toolAction("section")));
+  const m = h("div", { class: "menu", id: "menu" }, ...items);
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(e.clientX, innerWidth - r.width - 8) + "px"; m.style.top = Math.min(e.clientY, innerHeight - r.height - 8) + "px";
+  setTimeout(() => document.addEventListener("pointerdown", closeMenuOutside, true), 0);
+};
+function toolLabel(k) { for (const g of TOOLBAR) for (const [kk, l] of g) if (kk === k) return l; return k; }
+// Touche S : boîte à outils sous la souris (outils d'esquisse pendant l'esquisse).
+let mouseAt = [innerWidth / 2, innerHeight / 2];
+document.addEventListener("pointermove", (e) => { mouseAt = [e.clientX, e.clientY]; }, { passive: true });
+const S_TOOLS = ["sketch", "extrude", "cut", "revolve", "hole", "fillet", "chamfer", "shell", "mirror", "pattern", "measure", "section"];
+function shortcutBox() {
+  closeMenu();
+  const list = st.editSketch ? SK_TOOLS.map(([k, l]) => [k, l, () => sketcher.setTool(k)]) : S_TOOLS.map((k) => [k, toolLabel(k), () => toolAction(k)]);
+  const m = h("div", { class: "menu sbox", id: "menu" }, ...list.map(([k, l, fn]) => h("button", { title: l, onclick: () => { closeMenu(); fn(); } }, h("span", { html: ICONS[k] || "" }), h("small", {}, l))));
+  document.body.append(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(mouseAt[0] - r.width / 2, innerWidth - r.width - 8)) + "px";
+  m.style.top = Math.max(8, Math.min(mouseAt[1] - r.height / 2, innerHeight - r.height - 8)) + "px";
+  setTimeout(() => document.addEventListener("pointerdown", closeMenuOutside, true), 0);
+}
 viewer.onFreeClick = (e) => {
   if (st.editSketch || isAsm() || !st.mesh) { clearFaceSel(); return; }
   const eh = viewer.hitEdge(e); const fh = eh ? null : viewer.hitFace(e);
@@ -1462,12 +1553,9 @@ sketcher = new Sketcher($("#skSvg"), {
 });
 renderTools();
 $("#views").append(
-  h("button", { onclick: () => viewer.fit() }, "Recadrer"),
-  h("button", { onclick: () => viewer.fit([1, -1.3, 0.9]) }, "3D"),
-  h("div", { class: "row" }, h("button", { onclick: () => viewer.fit([0, -1, 0]) }, "Face"), h("button", { onclick: () => viewer.fit([0, 1, 0]) }, "Arrière")),
-  h("div", { class: "row" }, h("button", { onclick: () => viewer.fit([0, 0, 1]) }, "Dessus"), h("button", { onclick: () => viewer.fit([0, 0, -1]) }, "Dessous")),
-  h("div", { class: "row" }, h("button", { onclick: () => viewer.fit([1, 0, 0]) }, "Droite"), h("button", { onclick: () => viewer.fit([-1, 0, 0]) }, "Gauche")),
+  h("div", { class: "row" }, h("button", { title: "Tout voir (F)", onclick: () => viewer.fit() }, "Recadrer"), h("button", { title: "Vue isométrique (Ctrl 7)", onclick: () => viewer.fit([1, -1.3, 0.9]) }, "3D")),
 );
+viewer.mountCube($("#views"), (dir) => viewer.fit(dir));
 document.querySelector(".file").addEventListener("click", (e) => {
   const a = e.target.closest("button")?.dataset.act; if (!a) return;
   if (a === "new") newDialog();
@@ -1497,17 +1585,28 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { if (!typing) { e.preventDefault(); undo(); } return; }
   if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { if (!typing) { e.preventDefault(); redo(); } return; }
   if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); return; }
+  if (mod && /^[1-8]$/.test(e.key) && !typing && !st.editSketch) {
+    e.preventDefault();
+    const V = { 1: [0, -1, 0], 2: [0, 1, 0], 3: [-1, 0, 0], 4: [1, 0, 0], 5: [0, 0, 1], 6: [0, 0, -1], 7: [1, -1.3, 0.9] };
+    if (e.key === "8") { if (st.facePlane) viewer.fit(st.facePlane.n); else toast("Choisis d’abord une face plane (clic), puis Ctrl 8."); }
+    else viewer.fit(V[e.key]);
+    return;
+  }
   if (typing) return;
+  if (e.key === "Escape" && $("#menu")) { closeMenu(); return; }
   if (e.key === "Escape") {
     if (st.editSketch) { if (!sketcher.cancel()) { st.skSel = null; sketcher.sel = null; sketcher.subs = []; renderProps(); sketcher.render(); } return; }
-    if (st.pick) { stopPick(true); return; }
+    if (st.pick) { cancelFeature(); return; }
     if (viewer.pickMode) { viewer.setPick(null); banner(null); return; }
     if (st.pre?.edges.length || st.pre?.faces.length) { clearFaceSel(); return; }
+    if (st.sel && feat(st.sel) && !isAsm()) { cancelFeature(); return; }
     select(null); return;
   }
   if (e.key === "Enter" && st.editSketch && ["poly", "path", "spline"].includes(sketcher.draft?.type)) { sketcher.finishPoly(); return; }
   if (e.key === "Enter" && st.editSketch && !sketcher.draft) { closeSketch(); return; }
   if (e.key === "Enter" && !isAsm() && (st.pick || (st.sel && feat(st.sel) && feat(st.sel).type !== "sketch"))) { e.preventDefault(); validateFeature(); return; }
+  if (e.key === "Enter" && !isAsm() && !st.editSketch && !st.sel && lastTool) { e.preventDefault(); toolAction(lastTool); return; }
+  if (e.key.toLowerCase() === "s" && !mod && !e.altKey) { e.preventDefault(); shortcutBox(); return; }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (st.editSketch) { sketcher.deleteSel(); return; }
     if (isAsm()) { asmUI.deleteSelected(); return; }

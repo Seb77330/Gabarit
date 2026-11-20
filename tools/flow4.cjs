@@ -41,7 +41,7 @@ const { chromium } = require("playwright");
   await p.click(".tbtn[data-tool=draft]"); await p.waitForTimeout(1200);
   const q = await G(() => { const v = window.gabarit.viewer; const V = v.camera.position.constructor; const [a, b] = v.data.bb; const P = new V(b[0], 0, 4); P.project(v.camera); const r = v.renderer.domElement.getBoundingClientRect(); return [r.left + (P.x + 1) / 2 * r.width, r.top + (1 - P.y) / 2 * r.height]; });
   await p.mouse.move(q[0] - 3, q[1]); await p.mouse.click(q[0] - 3, q[1]); await p.waitForTimeout(300);
-  await p.click("#banner >> text=Valider"); await wait();
+  await p.click("#corner .ok"); await wait();
   console.log("draft", JSON.stringify(await G(() => [window.gabarit.doc.features.at(-1).faces, window.gabarit.st.errors])));
   // import du STEP exporté plus tôt
   const [fc] = await Promise.all([p.waitForEvent("filechooser"), p.click(".tbtn[data-tool=import]")]);
