@@ -12,7 +12,7 @@ export async function decodeDoc(t) {
   const buf = await new Response(new Blob([unb64url(t)]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
   return JSON.parse(new TextDecoder().decode(buf));
 }
-export const ONLINE_URL = "https://seb77330.github.io/gabarit/";
+export const ONLINE_URL = "https://seb77330.github.io/Gabarit/";
 
 export function createExtras(ctx) {
   const { h, $, fr, nf, toast, viewer, st } = ctx;
