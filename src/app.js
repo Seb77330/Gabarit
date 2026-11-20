@@ -310,7 +310,7 @@ function toolAction(k) {
     if (!path || !prof) toast("Il faut deux esquisses : un profil (par exemple un cercle centré sur l’origine) et un chemin (outil « Chemin »).");
     return;
   }
-  if (k === "sketch") { choosePlane((plane) => createSketch(plane)); return; }
+  if (k === "sketch") { if (st.facePlane) { const pl = st.facePlane; clearFaceSel(); createSketch(pl); return; } choosePlane((plane) => createSketch(plane)); return; }
   if (k === "helix") { choosePlane((plane) => insertFeature({ id: newId("f"), type: "helix", name: nextName("helix"), plane, cx: "0", cy: "0", d: "20", pitch: "5", height: "40", wire: "2", mode: "add" }), "Le ressort part de quel plan ?"); return; }
   if (k === "rib") {
     const isPath = (e) => e.type === "path" || (e.type === "spline" && !e.closed);
@@ -898,7 +898,7 @@ function constraintPanel(f) {
 }
 
 // ---------- Mode esquisse ----------
-const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"]];
+const SK_TOOLS = [["select", "Choisir"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"], ["convert", "Reprendre"]];
 const SK_HINTS = {
   select: "Clique sur une forme pour la choisir, puis glisse-la ou modifie ses cotes à droite. Molette : zoom. Clic droit ou glisser dans le vide : déplacer la vue.",
   rect: "Glisse d’un coin à l’autre (ou clique deux fois). Maj : sans accroche.",
@@ -910,10 +910,11 @@ const SK_HINTS = {
   ellipse: "Clique au centre, puis au coin du rectangle qui l’entoure.",
   spline: "Courbe lisse qui passe par chaque point cliqué. Reclique sur le premier point pour la fermer, ou double-clique (Entrée) pour la laisser ouverte, par exemple pour un balayage.",
   path: "Chemin ouvert pour un balayage : clique chaque point, puis double-clique ou Entrée pour finir.",
+  convert: "Clique sur une arête de la pièce (en pointillé) pour la reprendre dans l’esquisse. Les arêtes qui se touchent se raccordent ; un tour fermé devient un contour qu’on peut extruder.",
 };
 let sketcher;
 function openSketch(id, isNew = false) {
-  stopPick(false);
+  stopPick(false); clearFaceSel();
   st.editSketch = id; st.sel = id; st.skSel = null; st.skNew = isNew;
   $("#sketch").hidden = false; $("#views").hidden = true; banner(null);
   document.querySelectorAll(".tbtn[data-tool]").forEach((b) => (b.disabled = true));
@@ -925,7 +926,7 @@ function openSketch(id, isNew = false) {
 function closeSketch(silent) {
   if (!st.editSketch) return;
   const id = st.editSketch; st.editSketch = null;
-  $("#sketch").hidden = true; $("#views").hidden = false;
+  $("#sketch").hidden = true; $("#views").hidden = false; st.skPlane = null; viewer.setSketchView(null);
   document.querySelectorAll(".tbtn[data-tool]").forEach((b) => (b.disabled = false));
   if (silent) return;
   const f = feat(id);
@@ -937,7 +938,8 @@ function closeSketch(silent) {
 function updateSketchRefs() {
   const f = feat(st.editSketch); if (!f || !sketcher) return;
   let pl; try { pl = resolvePlane(f.plane, varsMap(doc.params)); } catch { return; }
-  const lines = [], pts = [];
+  st.skPlane = pl;
+  const lines = [], pts = [], edges = [];
   const m = st.mesh;
   if (m) {
     const L = m.lines; const tol = Math.max(0.01, viewer.size / 2000);
@@ -946,13 +948,34 @@ function updateSketchRefs() {
       const a = proj(i), b = proj(i + 3);
       lines.push([[a[0], a[1]], [b[0], b[1]]]);
     }
+    const seen = new Set();
+    const addPt = (p) => { const q = [round(p[0], 0.001), round(p[1], 0.001)]; const k = q.join(","); if (!seen.has(k)) { seen.add(k); pts.push(q); } };
     for (const g of m.edgeGroups) {
-      const s = g.start * 3, e = (g.start + g.count - 1) * 3;
-      for (const i of [s, e]) { const p = proj(i); if (Math.abs(p[2]) < tol) pts.push([round(p[0], 0.001), round(p[1], 0.001)]); }
+      // arête projetée : polyligne 2D (les segments sont stockés par paires)
+      const poly = []; let flat = true;
+      for (let v = g.start; v < g.start + g.count; v++) {
+        if (v > g.start && (v - g.start) % 2 === 0) continue;
+        const p = proj(v * 3); if (Math.abs(p[2]) > tol) flat = false;
+        poly.push([p[0], p[1]]);
+      }
+      const last = proj((g.start + g.count - 1) * 3); poly.push([last[0], last[1]]);
+      const clean = poly.filter((p, i) => i === 0 || Math.hypot(p[0] - poly[i - 1][0], p[1] - poly[i - 1][1]) > 1e-6);
+      if (clean.length >= 2) edges.push({ pts: clean, flat });
+      addPt(proj(g.start * 3)); addPt(last);
     }
   }
-  sketcher.refs = { lines, pts };
+  sketcher.refs = { lines, pts, edges };
   sketcher.render();
+}
+// Vue 3D calée sous l'esquisse : la pièce reste visible pendant qu'on dessine.
+function syncSketchView() {
+  if (!st.editSketch || !st.skPlane || !sketcher) { viewer.setSketchView(null); return; }
+  const sv = $("#skSvg").getBoundingClientRect(), vr = $("#view").getBoundingClientRect();
+  if (!sv.width || !vr.width) return;
+  const sx = vr.left + vr.width / 2 - sv.left, sy = vr.top + vr.height / 2 - sv.top;
+  const cu = (sx - sketcher.W / 2) / sketcher.zoom + sketcher.pan[0];
+  const cv = (sketcher.H / 2 - sy) / sketcher.zoom + sketcher.pan[1];
+  viewer.setSketchView({ pl: st.skPlane, cu, cv, zoom: sketcher.zoom });
 }
 function renderSketchTools() {
   const box = $("#skTools"); box.innerHTML = "";
@@ -1266,6 +1289,22 @@ async function openFile(file) {
 
 // ---------- Démarrage ----------
 const viewer = new Viewer($("#view"));
+// Clic simple sur une face plane (sans outil) : la choisir et proposer d'esquisser dessus.
+function clearFaceSel() { st.facePlane = null; viewer.highlightFace(null); $("#faceAct")?.remove(); }
+viewer.onFreeClick = (e) => {
+  clearFaceSel();
+  if (st.editSketch || isAsm() || !st.mesh) return;
+  const hit = viewer.hitFace(e);
+  if (!hit?.info?.plane) return;
+  st.facePlane = planeFromFace(hit.info);
+  viewer.highlightFace(hit.faceId);
+  const host = $(".stage").getBoundingClientRect();
+  const box = h("div", { id: "faceAct", class: "face-act", style: `left:${Math.min(e.clientX - host.left + 12, host.width - 250)}px;top:${Math.max(8, e.clientY - host.top - 20)}px` },
+    h("button", { class: "btn primary", onclick: () => { const pl = st.facePlane; clearFaceSel(); if (pl) createSketch(pl); } }, "✎ Esquisser sur cette face"),
+    h("button", { class: "btn", onclick: () => { const pl = st.facePlane; clearFaceSel(); if (pl) insertFeature({ id: newId("f"), type: "plane", name: nextName("plane"), base: pl, offset: "10", rot: "x", angle: "0" }); } }, "Plan décalé"),
+    h("button", { class: "x", title: "Fermer", onclick: () => clearFaceSel() }, "✕"));
+  $(".stage").append(box);
+};
 const asmUI = createAssemblyUI({
   h, $, nf, fr, toast, banner, viewer, newId, showBusy, library, addToLibrary, download, safeName, toggleSection,
   getDoc: () => doc, commit: () => pushHistory(),
@@ -1374,6 +1413,7 @@ sketcher = new Sketcher($("#skSvg"), {
   }, true),
   select: (id) => { st.skSel = id; renderProps(); },
   onTool: () => renderSketchTools(),
+  onView: () => syncSketchView(),
 });
 renderTools();
 $("#views").append(
@@ -1436,7 +1476,17 @@ window.addEventListener("beforeinstallprompt", (e) => {
   if (!$("[data-act=install]")) $(".file").prepend(h("button", { "data-act": "install", class: "accent", title: "Installer Gabarit comme une application" }, "Installer"));
 });
 async function installApp() { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $("[data-act=install]")?.remove(); }
-if ("serviceWorker" in navigator && location.protocol === "https:" && !window.GABARIT_WASM_GZ) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator && location.protocol === "https:" && !window.GABARIT_WASM_GZ) {
+  const hadCtrl = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register("sw.js").then((r) => r.update()).catch(() => {});
+  // nouvelle version téléchargée : proposer de recharger (ton travail est enregistré automatiquement)
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadCtrl || $("#updBar")) return;
+    document.body.append(h("div", { id: "updBar", class: "upd-bar" }, "Nouvelle version de Gabarit prête.",
+      h("button", { class: "btn primary", onclick: () => { save(); location.reload(); } }, "Mettre à jour"),
+      h("button", { class: "btn", onclick: () => $("#updBar").remove() }, "Plus tard")));
+  });
+}
 
 // Reprise du travail précédent
 let saved = null; try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch { saved = null; }
