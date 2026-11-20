@@ -150,11 +150,24 @@ function loadDoc(d, fit = true) {
 
 // ---------- Noyau 3D (Worker) ----------
 let worker, workerReady = false, buildReq = 0, buildTimer = null, pendingExport = new Map();
+// Le moteur 3D ne démarre pas dans certains aperçus (visionneuses intégrées, navigateurs anciens) : on le dit clairement.
+let engineFailed = false, readyTimer = null;
+function engineFail(why) {
+  if (workerReady || engineFailed) return;
+  engineFailed = true; showBusy(false); renderStatus();
+  if ($(".engine-fail")) return;
+  document.body.append(h("div", { class: "engine-fail" }, h("b", {}, "Le moteur 3D n’a pas pu démarrer ici."), h("br"),
+    "Les esquisses marchent, mais aucun volume ne peut être calculé. Ouvre Gabarit dans Chrome, Edge ou Firefox : télécharge le fichier Gabarit.html, puis double-clique dessus.",
+    why ? h("div", { class: "muted", style: "font-size:12px;margin-top:6px" }, "Détail : " + why) : null));
+}
 function startWorker() {
   const src = window.GABARIT_WORKER_SRC;
-  worker = src ? new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" }))) : new Worker("worker.js");
+  try { worker = src ? new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" }))) : new Worker("worker.js"); }
+  catch (e) { engineFail(e.message); return; }
+  if (typeof WebAssembly !== "object") { engineFail("WebAssembly indisponible"); return; }
+  clearTimeout(readyTimer); readyTimer = setTimeout(() => engineFail("le chargement a pris plus de 90 secondes"), 90000);
   worker.onmessage = (ev) => onWorker(ev.data);
-  worker.onerror = (e) => { showBusy(false); toast("Le noyau 3D n’a pas pu démarrer : " + (e.message || "erreur inconnue")); };
+  worker.onerror = (e) => { engineFail(e.message || "erreur inconnue"); };
   showBusy(true, "Chargement du moteur 3D…");
   (async () => {
     if (window.GABARIT_WASM_GZ) {
@@ -165,14 +178,14 @@ function startWorker() {
       }
       worker.postMessage({ type: "init", wasmBytes: wasmCache.slice(0) });
     } else worker.postMessage({ type: "init", wasmUrl: new URL("occt.wasm", location.href).href });
-  })();
+  })().catch((e) => engineFail(e.message));
 }
 let wasmCache = null, restarts = [];
 function restartWorker() {
   restarts = restarts.filter((t) => Date.now() - t < 30000); restarts.push(Date.now());
   if (restarts.length > 3) { showBusy(false); toast("Le moteur 3D bloque sur cette pièce. Annule la dernière modification (Ctrl+Z)."); return; } try { worker.terminate(); } catch { /* déjà arrêté */ } workerReady = false; st.building = false; startWorker(); }
 function onWorker(m) {
-  if (m.type === "ready") { workerReady = true; showBusy(false); if (isAsm()) asmUI.undoRefresh(); else requestBuild(0); return; }
+  if (m.type === "ready") { workerReady = true; clearTimeout(readyTimer); engineFailed = false; $(".engine-fail")?.remove(); showBusy(false); renderStatus(); if (isAsm()) asmUI.undoRefresh(); else requestBuild(0); return; }
   if (m.type === "built") {
     if (m.req !== buildReq) return;
     st.building = false; showBusy(false);
@@ -190,6 +203,7 @@ function onWorker(m) {
   if (m.type === "asmInterf") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.list); return; }
   if (m.type === "drawing") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.views); return; }
   if (m.type === "exported") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.blob); return; }
+  if (m.type === "error" && !workerReady) { engineFail(m.message); return; }
   if (m.type === "error" && /Aborted|RuntimeError|memory/i.test(m.message)) { restartWorker(); toast("Le moteur 3D a redémarré après une erreur. Vérifie la dernière valeur saisie."); return; }
   if (m.type === "error") { showBusy(false); st.building = false; const cb = pendingExport.get(m.req); if (cb) { pendingExport.delete(m.req); toast(m.message); } else toast("Erreur du noyau 3D : " + m.message); }
 }
@@ -269,6 +283,7 @@ const TOOL_TIPS = {
   print: "Voir les surplombs à soutenir et poser la pièce à plat automatiquement",
 };
 function toolAction(k) {
+  if (engineFailed && !["sketch", "plane", "measure", "section"].includes(k)) toast("Le moteur 3D n’a pas démarré dans cet aperçu : ouvre Gabarit.html dans Chrome, Edge ou Firefox pour créer des volumes.");
   if (st.editSketch) { toast("Termine d’abord l’esquisse en cours."); return; }
   if (k === "measure") { toggleMeasure(); return; }
   if (k === "section") { toggleSection(); return; }
@@ -672,14 +687,15 @@ function renderProps() {
   if (f.type === "sketch") {
     add(planeFields(f));
     add(h("div", { class: "note" }, `${(f.entities || []).length} forme(s) dans cette esquisse.`));
-    add(h("div", { class: "btnrow" }, h("button", { class: "btn primary", onclick: () => openSketch(f.id) }, "Modifier l’esquisse"),
-      h("button", { class: "btn", onclick: () => { select(f.id); toolAction("extrude"); } }, "Extruder"),
+    const used = doc.features.some((x) => x.sketch === f.id || x.profile === f.id || x.path === f.id || (x.sketches || []).includes(f.id));
+    if (!used) add(h("div", { class: "note ok" }, "Esquisse prête. Clique sur « Extruder » pour lui donner du volume."));
+    add(h("div", { class: "btnrow" }, h("button", { class: "btn" + (used ? "" : " primary"), onclick: () => { select(f.id); toolAction("extrude"); } }, "Extruder"),
+      h("button", { class: "btn" + (used ? " primary" : ""), onclick: () => openSketch(f.id) }, "Modifier l’esquisse"),
       h("button", { class: "btn", onclick: () => { select(f.id); toolAction("cut"); } }, "Enlever")));
   }
   if (f.type === "extrude") {
     add(selectField("Esquisse utilisée", f.sketch, [["", "—"], ...sketchOptions(f)], (v) => mutate(() => { f.sketch = v; })));
     add(segField("Effet", f, "mode", [["add", "Ajouter de la matière"], ["cut", "Enlever de la matière"]]));
-    add(segField("Sens", f, "dir", [["normal", "Normal"], ["inverse", "Inversé"], ["sym", "Des deux côtés"]]));
     add(segField("Jusqu’à", f, "end", [["dist", "Une distance"], ["face", "Une face"]]));
     if (f.end === "face") {
       add(h("div", { class: "note" + (f.upTo ? "" : " err") }, f.upTo ? "Face d’arrivée choisie. Le sens est déduit de la face." : "Clique sur « Choisir la face d’arrivée »."));
@@ -808,9 +824,11 @@ function renderProps() {
     add(exprField("Échelle", f, "scale", "×", { step: 0.1 }), exprField("Déplacement X", f, "tx"), exprField("Déplacement Y", f, "ty"), exprField("Déplacement Z", f, "tz"));
     if (f.format === "stl") add(h("div", { class: "note" }, "Un STL est un maillage : les congés et perçages fonctionnent mal dessus. Préfère le STEP quand tu l’as."));
   }
-  add(h("div", { class: "btnrow", style: "margin-top:10px" },
-    h("button", { class: "btn", onclick: () => mutate(() => { f.suppressed = !f.suppressed; }) || renderProps() }, f.suppressed ? "Réactiver" : "Désactiver"),
-    h("button", { class: "btn danger", onclick: () => deleteFeature(f.id) }, "Supprimer")));
+  if (f.type !== "sketch") add(h("div", { class: "note" }, "Les changements s’appliquent tout de suite, la pièce se recalcule en direct. Clique sur « Valider » quand c’est bon."));
+  add(h("div", { class: "btnrow", style: "margin-top:6px" },
+    f.type !== "sketch" ? h("button", { class: "btn primary", onclick: () => { stopPick(); select(null); toast("C’est validé. Tu peux toujours revenir modifier cette étape en cliquant dessus à gauche."); } }, "✓ Valider") : null,
+    h("button", { class: "btn danger", onclick: () => deleteFeature(f.id) }, "Supprimer"),
+    h("button", { class: "btn ghost", title: "Met l’étape en pause sans la supprimer (pour comparer avec et sans)", onclick: () => mutate(() => { f.suppressed = !f.suppressed; }) || renderProps() }, f.suppressed ? "Réactiver" : "Mettre en pause")));
   void vars;
 }
 
@@ -1188,7 +1206,7 @@ function renderStatus() {
       h("span", {}, "Encombrement ", h("b", {}, `${nf(b[0] - a[0], 1)} × ${nf(b[1] - a[1], 1)} × ${nf(b[2] - a[2], 1)} mm`)),
       m.cog ? h("label", { class: "cogchk", title: m.cog.map((v) => nf(v, 2)).join(" ; ") }, h("input", { type: "checkbox", checked: st.showCog, onchange: (e) => { st.showCog = e.target.checked; viewer.setCog(st.showCog ? m.cog : null); renderStatus(); } }), "Centre de gravité", st.showCog ? h("b", {}, " " + a3(m.cog)) : null) : null,
     );
-  } else s.append(h("span", {}, "Aucun volume pour l’instant."));
+  } else s.append(h("span", {}, engineFailed ? "Moteur 3D indisponible dans cet aperçu." : !workerReady ? "Chargement du moteur 3D…" : "Aucun volume pour l’instant."));
   s.append(h("span", { class: "grow" }));
   if (errCount) s.append(h("span", { style: "color:var(--err)" }, `${errCount} étape(s) en erreur`));
   if (st.stopAt !== null) s.append(h("span", { style: "color:var(--blue)" }, "Historique remonté"));

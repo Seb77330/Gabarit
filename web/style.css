@@ -225,3 +225,7 @@ table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }
 .variants select { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: var(--paper); font-size: 12.5px; }
 @media (max-width: 1500px) { .top .search kbd { display: none; } }
 @media (max-width: 1350px) { .file button { padding: 4px 7px; font-size: 13px; } .top { gap: 8px; } }
+.btn.ghost { border-color: transparent; background: none; color: var(--ink2); }
+.btn.ghost:hover { border-color: var(--line); }
+.engine-fail { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); z-index: 60; max-width: 460px; background: var(--card); border: 1px solid var(--err); border-radius: 12px; padding: 16px 18px; box-shadow: 0 10px 30px rgba(0,0,0,.15); z-index: 5; font-size: 14px; line-height: 1.5; }
+.engine-fail b { color: var(--err); }
