@@ -1,6 +1,6 @@
 import opencascade from "replicad-opencascadejs";
 import * as R from "replicad";
-import { build, meshShape, exportShape, drawingViews } from "./core.js";
+import { build, meshShape, exportShape, drawingViews, buildAssembly, assemblyInterferences, exportAssembly } from "./core.js";
 let OC = null;
 
 let ready = null;
@@ -27,6 +27,15 @@ self.onmessage = async (ev) => {
       const out = { type: "built", req: msg.req, errors: r.errors, info: r.info, mesh, ms: performance.now() - t, heap: OC?.wasmMemory?.buffer?.byteLength || 0 };
       const tr = mesh ? [mesh.vertices.buffer, mesh.normals.buffer, mesh.triangles.buffer, mesh.lines.buffer] : [];
       self.postMessage(out, tr);
+    } else if (msg.type === "asm") {
+      const t = performance.now();
+      const parts = await buildAssembly(msg.comps);
+      const tr = []; for (const p of parts) if (p.mesh) tr.push(p.mesh.vertices.buffer, p.mesh.normals.buffer, p.mesh.triangles.buffer, p.mesh.lines.buffer);
+      self.postMessage({ type: "asmBuilt", req: msg.req, parts, ms: performance.now() - t, heap: OC?.wasmMemory?.buffer?.byteLength || 0 }, tr);
+    } else if (msg.type === "asmInterf") {
+      self.postMessage({ type: "asmInterf", req: msg.req, list: assemblyInterferences(msg.comps) });
+    } else if (msg.type === "asmExport") {
+      self.postMessage({ type: "exported", req: msg.req, blob: exportAssembly(msg.kind, msg.comps) });
     } else if (msg.type === "drawing") {
       self.postMessage({ type: "drawing", req: msg.req, views: drawingViews(msg.views) });
     } else if (msg.type === "export") {

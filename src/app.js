@@ -7,6 +7,7 @@ import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, toWorl
 import { exampleDoc } from "./example.js";
 import { sheetSVG } from "./drawing.js";
 import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
+import { createAssemblyUI } from "./assembly.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 const h = (tag, attrs = {}, ...kids) => {
@@ -75,6 +76,16 @@ const st = {
   errors: {}, info: {}, mesh: null, building: false, lastMs: 0, firstFit: true,
 };
 function emptyDoc() { return { version: 1, name: "Pièce sans nom", material: "pla", params: [], features: [] }; }
+function emptyAsm() { return { version: 1, kind: "assembly", name: "Assemblage sans nom", params: [], features: [], components: [], mates: [] }; }
+const isAsm = () => doc.kind === "assembly";
+// Bibliothèque de pièces (dans ce navigateur), pour les assemblages
+const LIB = "gabarit-lib";
+function library() { try { return JSON.parse(localStorage.getItem(LIB) || "{}"); } catch { return {}; } }
+function addToLibrary(d) {
+  if (!d || d.kind === "assembly" || !d.features?.length) return;
+  const lib = library(); lib[d.name || "Pièce sans nom"] = JSON.parse(JSON.stringify(d));
+  try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* stockage plein */ }
+}
 const feat = (id) => doc.features.find((f) => f.id === id);
 const featIndex = (id) => doc.features.findIndex((f) => f.id === id);
 function nextName(type) {
@@ -92,11 +103,16 @@ function pushHistory() {
   hist = hist.slice(0, hidx + 1); hist.push(j); if (hist.length > 300) hist.shift(); hidx = hist.length - 1;
   save();
 }
-function save() { try { localStorage.setItem(STORE, JSON.stringify(doc)); } catch { /* stockage indisponible */ } }
+let libTimer;
+function save() {
+  try { localStorage.setItem(STORE, JSON.stringify(doc)); } catch { /* stockage indisponible */ }
+  if (!isAsm()) { clearTimeout(libTimer); libTimer = setTimeout(() => addToLibrary(doc), 800); }
+}
 function undo() { if (hidx > 0) { hidx--; restore(); } }
 function redo() { if (hidx < hist.length - 1) { hidx++; restore(); } }
 function restore() {
   doc = JSON.parse(hist[hidx]);
+  if (isAsm()) { save(); asmUI.undoRefresh(); asmUI.render(); return; }
   if (st.sel && !feat(st.sel)) st.sel = null;
   if (st.editSketch && !feat(st.editSketch)) closeSketch(true);
   stopPick(); save(); renderAll(); requestBuild();
@@ -109,7 +125,16 @@ function mutate(fn, transient = false) {
   if (st.editSketch) sketcher.render();
 }
 function loadDoc(d, fit = true) {
-  doc = Object.assign(emptyDoc(), d);
+  const wasAsm = isAsm();
+  doc = Object.assign(d.kind === "assembly" ? emptyAsm() : emptyDoc(), d);
+  document.body.classList.toggle("asm", isAsm());
+  $(".tree > h2").textContent = isAsm() ? "Assemblage" : "Historique";
+  if (isAsm()) {
+    closeSketch(true); stopPick(); viewer.setPick(null); banner(null); st.mesh = null; viewer.setCog(null); if (viewer.section) toggleSection();
+    hist = []; hidx = -1; pushHistory();
+    $("#docName").value = doc.name; asmUI.enter(); return;
+  }
+  if (wasAsm) { renderTools(); viewer.setMesh(null); viewer.setPick(null); banner(null); if (viewer.section) toggleSection(); }
   st.sel = null; st.stopAt = null; st.errors = {}; closeSketch(true); stopPick();
   hist = []; hidx = -1; pushHistory();
   st.firstFit = fit; renderAll(); requestBuild();
@@ -139,7 +164,7 @@ function restartWorker() {
   restarts = restarts.filter((t) => Date.now() - t < 30000); restarts.push(Date.now());
   if (restarts.length > 3) { showBusy(false); toast("Le moteur 3D bloque sur cette pièce. Annule la dernière modification (Ctrl+Z)."); return; } try { worker.terminate(); } catch { /* déjà arrêté */ } workerReady = false; st.building = false; startWorker(); }
 function onWorker(m) {
-  if (m.type === "ready") { workerReady = true; showBusy(false); requestBuild(0); return; }
+  if (m.type === "ready") { workerReady = true; showBusy(false); if (isAsm()) asmUI.undoRefresh(); else requestBuild(0); return; }
   if (m.type === "built") {
     if (m.req !== buildReq) return;
     st.building = false; showBusy(false);
@@ -153,6 +178,8 @@ function onWorker(m) {
     if (!st.editSketch) renderProps();
     return;
   }
+  if (m.type === "asmBuilt") { if (m.heap > 1.6e9) setTimeout(restartWorker, 50); asmUI.onBuilt(m); return; }
+  if (m.type === "asmInterf") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.list); return; }
   if (m.type === "drawing") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.views); return; }
   if (m.type === "exported") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.blob); return; }
   if (m.type === "error" && /Aborted|RuntimeError|memory/i.test(m.message)) { restartWorker(); toast("Le moteur 3D a redémarré après une erreur. Vérifie la dernière valeur saisie."); return; }
@@ -167,6 +194,7 @@ function requestBuild(delay = 150) {
   clearTimeout(buildTimer);
   buildTimer = setTimeout(() => {
     if (!workerReady) return;
+    if (isAsm()) return;
     buildReq++; st.building = true;
     setTimeout(() => { if (st.building) showBusy(true); }, 250);
     worker.postMessage({ type: "build", req: buildReq, doc, stopAt: currentStopAt() });
@@ -174,6 +202,12 @@ function requestBuild(delay = 150) {
 }
 let exportReq = 1e6;
 function doExport(kind) {
+  if (isAsm()) {
+    const list = asmUI.exportComps(); if (!list.length) { toast("Insère d’abord des pièces dans l’assemblage."); return; }
+    const req = ++exportReq; showBusy(true, "Export en cours…");
+    pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind === "step" ? "step" : "stl"}`); toast(kind === "step" ? "Assemblage STEP enregistré (une pièce par composant)." : "Assemblage STL enregistré."); });
+    worker.postMessage({ type: "asmExport", req, kind, comps: list }); return;
+  }
   if (!st.mesh) { toast("Rien à exporter pour l’instant : la pièce est vide."); return; }
   if (st.stopAt !== null || st.pick || st.editSketch) { toast("Termine l’édition en cours, puis remets la fin de la pièce tout en bas."); return; }
   const req = ++exportReq;
@@ -922,7 +956,7 @@ function markTool(k, on) { document.querySelector(`.tbtn[data-tool=${k}]`)?.clas
 // ---------- Vue en coupe ----------
 function toggleSection() {
   if (viewer.section) { viewer.setSection(null); $("#secbar")?.remove(); markTool("section", false); return; }
-  const bb = st.mesh?.bb || [[-50, -50, -50], [50, 50, 50]];
+  const bb = (isAsm() && viewer.asmBox ? [viewer.asmBox.min.toArray(), viewer.asmBox.max.toArray()] : st.mesh?.bb) || [[-50, -50, -50], [50, 50, 50]];
   const sec = { axis: "y", pos: (bb[0][1] + bb[1][1]) / 2, flip: true };
   const range = () => { const k = { x: 0, y: 1, z: 2 }[sec.axis]; return [bb[0][k], bb[1][k]]; };
   const bar = h("div", { class: "secbar", id: "secbar" });
@@ -1018,7 +1052,7 @@ function renderStatus() {
 let toastTimer;
 function toast(msg) { const t = $("#toast"); t.textContent = fr(msg); t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3800); }
 function showBusy(on, text = "Calcul…") { const b = $("#busy"); b.hidden = !on; if (on) b.lastChild.textContent = fr(text); }
-function renderAll() { $("#docName").value = doc.name; renderTree(); renderParams(); renderProps(); renderStatus(); renderOverlay(); refreshMarkers(); }
+function renderAll() { if (isAsm()) { $("#docName").value = doc.name; asmUI.render(); return; } $("#docName").value = doc.name; renderTree(); renderParams(); renderProps(); renderStatus(); renderOverlay(); refreshMarkers(); }
 
 function welcome(show) {
   const w = $("#welcome"); if (!show) { w.hidden = true; return; }
@@ -1028,6 +1062,7 @@ function welcome(show) {
     h("p", {}, "Ton atelier de conception 3D, gratuit et sans compte. Tu dessines un profil, tu lui donnes du volume, puis tu perces, arrondis et exportes pour l’impression 3D. Chaque étape reste modifiable."),
     h("div", { class: "btnrow" },
       h("button", { class: "btn primary", onclick: () => { welcome(false); loadDoc(emptyDoc()); toolAction("sketch"); } }, "Commencer une pièce"),
+      h("button", { class: "btn", onclick: () => { welcome(false); loadDoc(emptyAsm()); } }, "Commencer un assemblage"),
       h("button", { class: "btn", onclick: () => { welcome(false); loadDoc(exampleDoc()); } }, "Voir l’exemple"),
       h("button", { class: "btn", onclick: () => { welcome(false); $("#fileIn").click(); } }, "Ouvrir un fichier"))));
   w.hidden = false;
@@ -1040,6 +1075,7 @@ function help() {
     <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
     <h3>Formes avancées</h3><p><b>Plan</b> crée un plan décalé ou incliné pour y dessiner. <b>Lissage</b> relie plusieurs esquisses posées sur des plans différents. <b>Balayage</b> fait glisser un profil le long d’un <b>Chemin</b> (outil de l’esquisse). <b>Dépouille</b> incline des faces. <b>Répétition</b> et <b>Symétrie</b> copient toute la pièce ou seulement les fonctions choisies, en ligne, en grille ou en cercle. Dans un contour libre, tire le rond au milieu d’un côté pour le courber.</p>
     <h3>Outils</h3><p><b>Mesurer</b> : clique deux points. <b>Coupe</b> : regarde l’intérieur. <b>Mise en plan</b> : le plan 2D coté de ta pièce, à imprimer ou en PDF. <b>Importer</b> : ajoute une pièce STEP ou STL. Coche « Centre de gravité » en bas pour l’afficher.</p>
+    <h3>Assemblages</h3><p><b>Nouveau → Assemblage</b>, puis <b>Insérer une pièce</b> : tes pièces sont rangées automatiquement dans <b>Mes pièces</b>. La première pièce est fixe. <b>Coïncidence</b> plaque deux faces planes, <b>Concentrique</b> aligne un axe dans un trou, <b>Distance</b> écarte deux faces. Ensuite : <b>Interférences</b> (les pièces se chevauchent-elles ?), <b>Vue éclatée</b>, <b>Nomenclature</b> (liste des pièces avec masses, exportable en tableur) et export STEP de tout l’assemblage.</p>
     <h3>4. L’historique</h3><p>À gauche, chaque étape reste modifiable : clique dessus et change ses valeurs, la pièce se recalcule. Glisse la ligne bleue « Fin de la pièce » vers le haut pour revenir en arrière dans la construction.</p>
     <h3>5. Les paramètres</h3><p>En bas à gauche, donne un nom à une cote (par exemple <b>longueur</b> = 80) et tape <b>longueur</b> ou <b>longueur/2</b> dans n’importe quelle case. Change la valeur : toute la pièce suit.</p>
     <h3>6. Exporter</h3><p><b>STL</b> pour ton trancheur d’impression 3D, <b>STEP</b> pour les autres logiciels de CAO. <b>Enregistrer</b> garde un fichier .gabarit que tu pourras rouvrir et modifier. Ton travail est aussi gardé automatiquement dans le navigateur.</p>
@@ -1054,13 +1090,48 @@ function saveFile() {
 async function openFile(file) {
   try {
     const d = JSON.parse(await file.text());
-    if (!Array.isArray(d.features)) throw new Error();
-    loadDoc(d); toast(`« ${d.name || file.name} » ouverte.`);
+    if (!Array.isArray(d.features) && d.kind !== "assembly") throw new Error();
+    if (d.kind === "assembly") d.features = d.features || [];
+    if (!isAsm() || d.kind === "assembly") { loadDoc(d); toast(`« ${d.name || file.name} » ouvert${d.kind === "assembly" ? "" : "e"}.`); }
+    else { addToLibrary(d); toast(`« ${d.name || file.name} » ajoutée à ta bibliothèque : clique sur « Insérer une pièce ».`); }
   } catch { toast("Ce fichier n’est pas une pièce Gabarit valide."); }
 }
 
 // ---------- Démarrage ----------
 const viewer = new Viewer($("#view"));
+const asmUI = createAssemblyUI({
+  h, $, nf, fr, toast, banner, viewer, newId, showBusy, library, addToLibrary, download, safeName, toggleSection,
+  getDoc: () => doc, commit: () => pushHistory(),
+  post: (m) => { if (workerReady) worker.postMessage(m); },
+  request: (m, cb) => { const req = ++exportReq; pendingExport.set(req, cb); worker.postMessage({ ...m, req }); },
+  material: (k) => MATERIALS[k] || MATERIALS.pla,
+});
+function newDialog() {
+  const dlg = $("#dlg"); dlg.innerHTML = "";
+  const go = (d) => { dlg.close(); loadDoc(d); if (!d.kind) toolAction("sketch"); };
+  dlg.append(h("div", { class: "dh" }, "Nouveau"), h("div", { class: "db" },
+    h("p", {}, "Ton travail actuel reste dans ta bibliothèque (les pièces) ; pense à l’enregistrer en fichier si tu veux le garder ailleurs."),
+    h("div", { class: "planes" },
+      h("button", { class: "btn", onclick: () => go(emptyDoc()) }, h("b", {}, "Pièce"), " : dessiner et modeler une pièce"),
+      h("button", { class: "btn", onclick: () => go(emptyAsm()) }, h("b", {}, "Assemblage"), " : réunir plusieurs pièces et les positionner"))),
+  h("div", { class: "df" }, h("button", { class: "btn", onclick: () => dlg.close() }, "Annuler")));
+  dlg.showModal();
+}
+function libraryDialog() {
+  const dlg = $("#dlg"); dlg.innerHTML = "";
+  const draw = () => {
+    const lib = library(); const names = Object.keys(lib).sort((a, b) => a.localeCompare(b, "fr"));
+    dlg.innerHTML = "";
+    dlg.append(h("div", { class: "dh" }, "Mes pièces"), h("div", { class: "db" },
+      names.length ? h("table", { class: "bom" }, names.map((n) => h("tr", {}, h("td", {}, h("b", {}, n)), h("td", {}, `${lib[n].features.length} étape(s)`),
+        h("td", {}, h("button", { class: "btn", onclick: () => { dlg.close(); loadDoc(lib[n]); } }, "Ouvrir")),
+        h("td", {}, h("button", { class: "btn danger", onclick: () => { if (!confirm(fr(`Retirer « ${n} » de ta bibliothèque ?`))) return; delete lib[n]; try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* */ } draw(); } }, "Retirer")))))
+        : h("p", {}, "Ta bibliothèque est vide. Chaque pièce que tu crées y est rangée automatiquement.")),
+    h("div", { class: "df" }, h("button", { class: "btn primary", onclick: () => dlg.close() }, "Fermer")));
+    typoTree(dlg);
+  };
+  draw(); dlg.showModal();
+}
 sketcher = new Sketcher($("#skSvg"), {
   getSketch: () => feat(st.editSketch) || { entities: [] },
   getDoc: () => doc,
@@ -1085,7 +1156,7 @@ $("#views").append(
 );
 document.querySelector(".file").addEventListener("click", (e) => {
   const a = e.target.closest("button")?.dataset.act; if (!a) return;
-  if (a === "new") { if (!doc.features.length || confirm(fr("Commencer une nouvelle pièce ? Pense à enregistrer celle-ci si tu veux la garder."))) { loadDoc(emptyDoc()); } }
+  if (a === "new") newDialog();
   if (a === "open") $("#fileIn").click();
   if (a === "save") saveFile();
   if (a === "undo") undo();
@@ -1093,10 +1164,11 @@ document.querySelector(".file").addEventListener("click", (e) => {
   if (a === "stl") doExport("stl");
   if (a === "step") doExport("step");
   if (a === "help") help();
+  if (a === "lib") libraryDialog();
   if (a === "install") installApp();
 });
 $(".params-box").addEventListener("click", (e) => { if (e.target.closest("[data-act=addParam]")) addParam(); });
-$("#docName").addEventListener("change", (e) => mutate(() => { doc.name = e.target.value.trim() || "Pièce sans nom"; }));
+$("#docName").addEventListener("change", (e) => { if (isAsm()) { doc.name = e.target.value.trim() || "Assemblage sans nom"; pushHistory(); return; } mutate(() => { doc.name = e.target.value.trim() || "Pièce sans nom"; }); });
 $("#fileIn").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) openFile(f); e.target.value = ""; });
 document.addEventListener("dragover", (e) => e.preventDefault());
 document.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) openFile(f); });
@@ -1116,6 +1188,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && st.editSketch && (sketcher.draft?.type === "poly" || sketcher.draft?.type === "path")) { sketcher.finishPoly(); return; }
   if (e.key === "Delete" || e.key === "Backspace") {
     if (st.editSketch) { sketcher.deleteSel(); return; }
+    if (isAsm()) { asmUI.deleteSelected(); return; }
     if (st.sel) deleteFeature(st.sel);
     return;
   }
@@ -1133,9 +1206,9 @@ if ("serviceWorker" in navigator && location.protocol === "https:" && !window.GA
 
 // Reprise du travail précédent
 let saved = null; try { saved = JSON.parse(localStorage.getItem(STORE) || "null"); } catch { saved = null; }
-if (saved && Array.isArray(saved.features) && (saved.features.length || saved.params?.length)) loadDoc(saved);
+if (saved && (saved.kind === "assembly" || (Array.isArray(saved.features) && (saved.features.length || saved.params?.length)))) loadDoc(saved);
 else { loadDoc(emptyDoc()); welcome(true); }
 typoTree(document.body);
 startWorker();
-window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, exampleDoc };
+window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, exampleDoc, emptyAsm, library, addToLibrary, asmUI };
 if ("launchQueue" in window) window.launchQueue.setConsumer(async (p) => { for (const fh of p.files || []) openFile(await fh.getFile()); });

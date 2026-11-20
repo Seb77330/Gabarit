@@ -197,3 +197,10 @@ dialog.wide { max-width: min(1280px, calc(100vw - 24px)); width: 100%; }
 .clist .citem .g { color: #7a3fd1; font-weight: 700; text-align: center; }
 .clist .citem input { width: 70px; border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; background: var(--paper); }
 .clist .citem .x { border: 0; background: none; color: var(--muted); }
+/* Assemblages */
+body.asm .params-box { display: none; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,.25); flex: none; margin-right: 6px; }
+.swatch.big { width: 18px; height: 18px; }
+table.bom { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.bom th, table.bom td { border-bottom: 1px solid var(--line, #dde2e8); padding: 6px 8px; text-align: left; }
+table.bom th { font-weight: 600; background: rgba(0,0,0,.03); }

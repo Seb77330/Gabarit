@@ -10,7 +10,7 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 | Congés et chanfreins d'esquisse | ✅ congé des angles du contour libre |
 | Traits de construction | ✅ |
 | Cotes pilotantes, équations, variables globales | ✅ (paramètres nommés, calculs dans toutes les cases) |
-| Contraintes géométriques automatiques (horizontal, tangent, coïncident, symétrique…) et solveur | 🔨 v0.3, en cours |
+| Contraintes géométriques (horizontal, vertical, parallèle, perpendiculaire, égal, tangent, coïncident, symétrique, fixe) et solveur, degrés de liberté | ✅ v0.3 |
 | Chemins ouverts (pour balayage) | ✅ v0.2 |
 | Splines, ellipses, texte | 🗓️ |
 | Convertir les entités, décaler, ajuster, miroir d'esquisse, répétition d'esquisse | 🗓️ (aujourd'hui : arêtes projetées en pointillé et accroche) |
@@ -45,7 +45,8 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 | Mesure | ✅ v0.2 |
 | Vue en coupe | ✅ v0.2 |
 | Annuler, historique, barre de reprise, désactiver une fonction | ✅ |
-| Analyse de dépouille, d'épaisseur, interférences | 🗓️ |
+| Détection des interférences (assemblages) | ✅ v0.4 |
+| Analyse de dépouille, d'épaisseur | 🗓️ |
 
 ## 4. Fichiers
 | SolidWorks | Gabarit |
@@ -64,7 +65,10 @@ Légende : ✅ fait · 🔨 en cours · 🗓️ prévu plus tard · ❌ hors de 
 ## 6. Assemblages
 | SolidWorks | Gabarit |
 |---|---|
-| Insérer des pièces, contraintes (coïncidence, concentrique…), éclatés, nomenclature | 🗓️ v0.4 |
+| Insérer des pièces (Gabarit, STEP, STL), composant fixe, bibliothèque « Mes pièces » | ✅ v0.4 |
+| Contraintes : coïncidence, concentrique, distance, parallèles (inverser, désactiver) | ✅ v0.4 |
+| Interférences, vue éclatée, nomenclature avec masses (export tableur), export STEP/STL de l'assemblage | ✅ v0.4 |
+| Contraintes d'angle, de tangence, engrenages ; sous-assemblages ; mise en plan d'assemblage | 🗓️ |
 
 ## 7. Simulation, rendu, PDM
 | SolidWorks | Gabarit |

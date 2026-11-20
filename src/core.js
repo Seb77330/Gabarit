@@ -321,6 +321,12 @@ export function meshShape(shape) {
       if (fc.geomType === "PLANE") {
         const c = fc.center; const n = fc.normalAt(c);
         faces[fc.hashCode] = { plane: true, c: [c.x, c.y, c.z], n: [n.x, n.y, n.z] };
+      } else if (fc.geomType === "CYLINDRE") {
+        const oc = R.getOC();
+        const ad = new oc.BRepAdaptor_Surface(fc.wrapped, true); const cy = ad.Cylinder(); const ax = cy.Axis();
+        const l = ax.Location(), d = ax.Direction();
+        faces[fc.hashCode] = { cyl: true, p: [l.X(), l.Y(), l.Z()], d: [d.X(), d.Y(), d.Z()], r: cy.Radius() };
+        ad.delete(); cy.delete?.(); ax.delete?.();
       }
     } catch { /* face ignorée */ }
   }
@@ -363,4 +369,58 @@ export function drawingViews(names = ["front", "top", "right", "iso"]) {
     out[n] = { visible: paths(visible), hidden: paths(hidden), bounds: bb.bounds };
   }
   return out;
+}
+
+// ---------- Assemblages ----------
+const asmCache = new Map();
+async function componentShape(c) {
+  const key = c.key;
+  const hit = asmCache.get(c.id);
+  if (hit && hit.key === key) return hit.shape;
+  let shape = null;
+  if (c.src.kind === "part") {
+    const r = await build(c.src.doc);
+    shape = r.shape;
+    if (!shape) throw new Error("La pièce est vide");
+  } else {
+    const blob = new Blob([decodeB64(c.src.data)]);
+    shape = c.src.kind === "stl" ? await R.importSTL(blob) : await R.importSTEP(blob);
+  }
+  asmCache.set(c.id, { key, shape });
+  return shape;
+}
+function placed(shape, pos, rot) {
+  let s = shape.clone();
+  if (rot[0]) s = s.rotate(rot[0], [0, 0, 0], [1, 0, 0]);
+  if (rot[1]) s = s.rotate(rot[1], [0, 0, 0], [0, 1, 0]);
+  if (rot[2]) s = s.rotate(rot[2], [0, 0, 0], [0, 0, 1]);
+  if (pos.some(Boolean)) s = s.translate(pos);
+  return s;
+}
+export async function buildAssembly(comps) {
+  const out = [];
+  for (const id of [...asmCache.keys()]) if (!comps.some((c) => c.id === id)) asmCache.delete(id);
+  for (const c of comps) {
+    try { const shape = await componentShape(c); out.push({ id: c.id, mesh: meshShape(shape) }); }
+    catch (e) { out.push({ id: c.id, error: humanError(e) }); }
+  }
+  return out;
+}
+export function assemblyInterferences(comps) {
+  const items = comps.map((c) => { const h = asmCache.get(c.id); return h ? { c, s: placed(h.shape, c.pos, c.rot) } : null; }).filter(Boolean);
+  const res = [];
+  for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+    const A = items[i], B = items[j];
+    const [a0, a1] = A.s.boundingBox.bounds, [b0, b1] = B.s.boundingBox.bounds;
+    if ([0, 1, 2].some((k) => a1[k] < b0[k] || b1[k] < a0[k])) continue;
+    try { const v = R.measureVolume(A.s.intersect(B.s)); if (v > 1e-3) res.push({ a: A.c.id, b: B.c.id, volume: v }); } catch { /* ignoré */ }
+  }
+  return res;
+}
+export function exportAssembly(kind, comps) {
+  const items = comps.map((c) => { const h = asmCache.get(c.id); return h ? { shape: placed(h.shape, c.pos, c.rot), name: c.name, color: c.color } : null; }).filter(Boolean);
+  if (!items.length) throw new Error("L’assemblage est vide");
+  if (kind === "step") return R.exportSTEP(items);
+  const comp = R.makeCompound(items.map((i) => i.shape));
+  return comp.blobSTL({ tolerance: 0.05, angularTolerance: 0.1, binary: true });
 }
