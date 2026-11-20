@@ -23,6 +23,8 @@ void main() {
   gl_FragColor = vec4(uLine * a / alpha, alpha);
 }`;
 
+// arcs pour tourner : rayon et étendue (en unités de poignée, 1 = longueur d'une flèche)
+const RING_R = 0.7, RING_A0 = 16 * Math.PI / 180, RING_A1 = 74 * Math.PI / 180;
 export class Viewer {
   constructor(host) {
     this.host = host;
@@ -93,7 +95,7 @@ export class Viewer {
       if (this.handleGroup) {
         this.handleGroup.visible = !this.sketchView;
         const px = 2 * Math.tan(this.camera.fov * Math.PI / 360) / (this.renderer.domElement.clientHeight || 1); // taille d'un pixel à 1 mm de distance
-        for (const g of this.handles) { g.getWorldPosition(this.tmpV); g.scale.setScalar(Math.max(1e-6, this.tmpV.distanceTo(this.camera.position) * px * 78)); }
+        for (const g of this.handles) { g.getWorldPosition(this.tmpV); g.scale.setScalar(Math.max(1e-6, this.tmpV.distanceTo(this.camera.position) * px * 104)); }
       }
       this.renderer.render(this.scene, this.sketchView ? this.sketchCam : this.camera); this.updateCube(); requestAnimationFrame(loop);
     };
@@ -203,8 +205,9 @@ export class Viewer {
     }
     this.scene.add(this.markerGroup);
   }
-  // Flèches à tirer dans la vue. Chaque poignée : { id, origin, dir, color }. Pendant qu'on tire,
-  // onDrag(id, distance le long de la flèche, "move" | "end", événement) renvoie la distance retenue.
+  // Flèches à tirer dans la vue. Chaque poignée : { id, origin, dir, color } (flèche) ou { …, ring: true }
+  // (arc pour tourner autour de dir). Pendant qu'on tire, onDrag(id, distance le long de la flèche ou
+  // angle en degrés, "move" | "end", événement) renvoie la valeur retenue.
   setHandles(list, onDrag) {
     if (this.drag) return;
     if (this.handleGroup) { this.scene.remove(this.handleGroup); this.handleGroup.traverse((o) => o.geometry?.dispose()); }
@@ -212,7 +215,9 @@ export class Viewer {
     if (!list?.length) return;
     this.handleGroup = new THREE.Group();
     const up = new THREE.Vector3(0, 1, 0);
+    const rings = list.filter((hd) => hd.ring);
     for (const hd of list) {
+      if (hd.ring) continue;
       const g = new THREE.Group(); g.position.set(...hd.origin);
       const dir = new THREE.Vector3(...hd.dir).normalize(); g.quaternion.setFromUnitVectors(up, dir);
       const mat = new THREE.MeshBasicMaterial({ color: hd.color ?? 0xc4552b, depthTest: false, transparent: true, opacity: 0.92 });
@@ -223,13 +228,40 @@ export class Viewer {
       g.add(shaft, tip, hit); g.userData = { hd, mat, hit, dir, color: mat.color.getHex() };
       this.handleGroup.add(g); this.handles.push(g);
     }
+    // arcs pour tourner : un quart de cercle autour de l'axe, à tirer comme un volant
+    const zAxis = new THREE.Vector3(0, 0, 1);
+    for (const hd of rings) {
+      const g = new THREE.Group(); g.position.set(...hd.origin);
+      const dir = new THREE.Vector3(...hd.dir).normalize();
+      if (hd.u) { const u = new THREE.Vector3(...hd.u).normalize(); g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, new THREE.Vector3().crossVectors(dir, u), dir)); } // l'arc part de u
+      else g.quaternion.setFromUnitVectors(zAxis, dir);
+      const mat = new THREE.MeshBasicMaterial({ color: hd.color ?? 0xc4552b, depthTest: false, transparent: true, opacity: 0.92 });
+      // l'arc laisse un peu de place de chaque côté, pour ne pas toucher les flèches
+      const arc = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.024, 8, 36, RING_A1 - RING_A0), mat); arc.rotation.z = RING_A0; arc.renderOrder = 30;
+      const ends = [RING_A0, RING_A1].map((a) => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.05, 14, 10), mat); m.position.set(RING_R * Math.cos(a), RING_R * Math.sin(a), 0); m.renderOrder = 30; return m; });
+      const hit = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.085, 6, 24, RING_A1 - RING_A0), new THREE.MeshBasicMaterial({ visible: false })); hit.rotation.z = RING_A0;
+      g.add(arc, ...ends, hit); g.userData = { hd, mat, hit, dir, ring: true, color: mat.color.getHex() };
+      this.handleGroup.add(g); this.handles.push(g);
+    }
     this.scene.add(this.handleGroup);
   }
   handleAt(e) {
     if (!this.handles.length || this.sketchView) return null;
     this.ray(e);
     const hits = this.raycaster.intersectObjects(this.handles.map((g) => g.userData.hit), false);
-    return hits.length ? hits[0].object.parent : null;
+    if (!hits.length) return null;
+    // plusieurs poignées sous la souris : on garde celle dont le trait passe le plus près du pointeur
+    const cands = [...new Set(hits.map((h) => h.object.parent))]; if (cands.length === 1) return cands[0];
+    const ray = this.raycaster.ray; const P = new THREE.Vector3(); let best = null, bd = Infinity;
+    for (const g of cands) {
+      const o = g.getWorldPosition(new THREE.Vector3()); const sc = g.scale.x; let d = Infinity;
+      if (g.userData.ring) {
+        const u = new THREE.Vector3(1, 0, 0).applyQuaternion(g.quaternion), v = new THREE.Vector3(0, 1, 0).applyQuaternion(g.quaternion);
+        for (let i = 0; i <= 12; i++) { const a = RING_A0 + (RING_A1 - RING_A0) * i / 12; P.copy(o).addScaledVector(u, RING_R * sc * Math.cos(a)).addScaledVector(v, RING_R * sc * Math.sin(a)); d = Math.min(d, ray.distanceToPoint(P)); }
+      } else for (let i = 0; i <= 10; i++) { P.copy(o).addScaledVector(g.userData.dir, sc * (0.06 + i / 10)); d = Math.min(d, ray.distanceToPoint(P)); }
+      d /= sc; if (d < bd) { bd = d; best = g; }
+    }
+    return best;
   }
   // distance le long de la flèche du point le plus proche du rayon de la souris
   handleT(e, o, d) {
@@ -241,15 +273,51 @@ export class Viewer {
     if (e.button !== 0) return;
     const g = this.handleAt(e); if (!g) return;
     e.stopImmediatePropagation(); e.preventDefault();
-    const o = g.getWorldPosition(new THREE.Vector3()); const t0 = this.handleT(e, o, g.userData.dir);
-    if (t0 === null) return;
-    this.drag = { g, o, t0, pid: e.pointerId, applied: 0 };
+    const o = g.getWorldPosition(new THREE.Vector3());
+    if (g.userData.ring) {
+      // volant : on suit la souris autour de l'axe. Vu de face, l'arc reste sous le pointeur ; vu par la
+      // tranche, on suit la souris le long de la tangente, là où l'arc a été saisi.
+      const dir = g.userData.dir; const R = RING_R * g.scale.x;
+      const u = new THREE.Vector3(1, 0, 0).applyQuaternion(g.quaternion), v = new THREE.Vector3(0, 1, 0).applyQuaternion(g.quaternion);
+      const d = { g, o, ring: true, q0: g.quaternion.clone(), pid: e.pointerId, applied: 0, acc: 0, px: e.clientX, py: e.clientY };
+      const angle = (ev) => {
+        this.ray(ev); const ray = this.raycaster.ray; const den = ray.direction.dot(dir); if (Math.abs(den) < 1e-6) return null;
+        const t = o.clone().sub(ray.origin).dot(dir) / den; if (t <= 0) return null;
+        const q = ray.origin.clone().addScaledVector(ray.direction, t).sub(o); return Math.atan2(q.dot(v), q.dot(u)) * 180 / Math.PI;
+      };
+      this.ray(e);
+      if (Math.abs(this.raycaster.ray.direction.dot(dir)) > 0.25 && angle(e) !== null) { d.angle = angle; d.a = angle(e); }
+      else {
+        const hitP = this.raycaster.intersectObject(g.userData.hit, false)[0]?.point; if (!hitP) return;
+        const rad = hitP.clone().sub(o); rad.addScaledVector(dir, -rad.dot(dir)).setLength(R); // ramené sur le cercle
+        const p0 = o.clone().add(rad); const tan = new THREE.Vector3().crossVectors(dir, rad).normalize();
+        const r = this.renderer.domElement.getBoundingClientRect();
+        const scr = (w) => { const q = w.clone().project(this.camera); return [(q.x + 1) / 2 * r.width, (1 - q.y) / 2 * r.height]; };
+        const eps = R * 0.05; const a = scr(p0), b = scr(p0.clone().addScaledVector(tan, eps));
+        const tx = b[0] - a[0], ty = b[1] - a[1]; const len = Math.hypot(tx, ty); if (len < 1e-6) return;
+        Object.assign(d, { x0: e.clientX, y0: e.clientY, tx: tx / len, ty: ty / len, pxPerDeg: Math.max(0.35, (len / eps) * R * Math.PI / 180) });
+      }
+      this.drag = d;
+    } else {
+      const t0 = this.handleT(e, o, g.userData.dir);
+      if (t0 === null) return;
+      this.drag = { g, o, t0, pid: e.pointerId, applied: 0, px: e.clientX, py: e.clientY };
+    }
     try { this.renderer.domElement.setPointerCapture(e.pointerId); } catch { /* pointeur déjà relâché */ }
     this.renderer.domElement.style.cursor = "grabbing";
   }
   handleMove(e) {
     if (this.drag) {
       e.stopImmediatePropagation();
+      if (this.drag.ring) {
+        const d = this.drag; let deg;
+        if (d.angle) { const a = d.angle(e); if (a === null) return; d.acc += ((a - d.a + 540) % 360) - 180; d.a = a; deg = d.acc; } // tours complets possibles
+        else deg = ((e.clientX - d.x0) * d.tx + (e.clientY - d.y0) * d.ty) / d.pxPerDeg;
+        const applied = this.onHandle?.(d.g.userData.hd.id, deg, "move", e);
+        d.applied = typeof applied === "number" ? applied : deg;
+        d.g.quaternion.copy(d.q0).premultiply(new THREE.Quaternion().setFromAxisAngle(d.g.userData.dir, d.applied * Math.PI / 180));
+        return;
+      }
       const { g, o, t0 } = this.drag; const t = this.handleT(e, o, g.userData.dir); if (t === null) return;
       const applied = this.onHandle?.(g.userData.hd.id, t - t0, "move", e);
       this.drag.applied = typeof applied === "number" ? applied : t - t0;
@@ -272,6 +340,9 @@ export class Viewer {
     const d = this.drag; this.drag = null;
     try { this.renderer.domElement.releasePointerCapture(d.pid); } catch { /* déjà relâché */ }
     this.renderer.domElement.style.cursor = this.pickMode ? "crosshair" : "";
+    // un simple clic sur une poignée (sans tirer) n'est pas un réglage : pendant un choix sur la pièce,
+    // il va à la pièce qui est dessous
+    if (!d.applied && Math.hypot(e.clientX - d.px, e.clientY - d.py) < 5) { this.onHandle?.(d.g.userData.hd.id, 0, "cancel", e); if (this.pickMode && e.type === "pointerup") this.onClick(e); return; }
     this.onHandle?.(d.g.userData.hd.id, d.applied, "end", e);
   }
   setPick(mode) { this.pickMode = mode; this.clearHover(); this.renderer.domElement.style.cursor = mode ? "crosshair" : ""; }

@@ -434,6 +434,14 @@ export async function build(doc, opts = {}) {
   const refs = refPlanes(doc.features, vars, stopAt);
   const P = (def) => resolvePlane(def, vars, refs);
   const getSketch = (id, what = "une esquisse") => { const sk = sketches[id]; if (!sk) throw new Error(`Choisis ${what} valide (placée avant cette fonction)`); return sk; };
+  // « probe » : un point de la pièce finie. On note, après chaque étape qui change la pièce, la distance de ce
+  // point à sa surface : l'étape qui a fait la face est la première depuis laquelle cette distance n'a plus bougé.
+  const probe = opts.probe ? R.makeVertex(opts.probe) : null; const probed = []; let probedShape = null;
+  const probeNow = (id) => {
+    if (!probe || shape === probedShape) return; probedShape = shape; let d = Infinity;
+    if (shape) { let comp = null, faces = []; try { faces = shape.faces; comp = R.makeCompound(faces); d = R.measureDistanceBetween(probe, comp); } catch { d = Infinity; } finally { try { comp?.delete(); for (const x of faces) x.delete(); } catch { /* déjà libéré */ } } }
+    probed.push({ id, d });
+  };
   const apply = (solid, mode, id) => {
     if (id) tools[id] = { solid, mode };
     if (mode === "cut") { if (!shape) throw new Error("Il n’y a pas encore de matière à enlever"); shape = shape.cut(solid); }
@@ -635,7 +643,10 @@ export async function build(doc, opts = {}) {
       if (globalThis.GABARIT_DEBUG) console.error(f.id, e);
       errors[f.id] = humanError(e);
     }
+    probeNow(f.id);
   }
+  let owner = null;
+  if (probed.length) { const last = probed[probed.length - 1].d; if (isFinite(last)) for (let i = probed.length - 1; i >= 0 && Math.abs(probed[i].d - last) < 1e-5; i--) owner = probed[i].id; }
   lastShape = shape;
   let regions;
   if (opts.regionsOf && sketches[opts.regionsOf]) {
@@ -652,7 +663,7 @@ export async function build(doc, opts = {}) {
       }
     } catch (e) { if (globalThis.GABARIT_DEBUG) console.error(e); }
   }
-  return { shape, errors, sketches, info, regions };
+  return { shape, errors, sketches, info, regions, owner };
 }
 
 function humanError(e) {

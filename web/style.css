@@ -191,6 +191,15 @@ body.simple .params-box, body.simple .rollbar, body.simple .xp { display: none; 
 .coach .cs button:hover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
 .coach .cs button span { width: 20px; height: 20px; flex: none; color: var(--accent); display: grid; place-items: center; }
 .coach .cs button span svg { width: 20px; height: 20px; }
+.coach.defi { width: min(350px, calc(100% - 28px)); }
+.coach.defi p { font-size: 13px; color: var(--ink); margin: 6px 0 8px; }
+.coach.defi p b { color: var(--accent-ink, var(--accent)); font-weight: 700; }
+.coach .dots { display: flex; gap: 5px; margin: 6px 0 0; }
+.coach .dots span { height: 4px; flex: 1; border-radius: 2px; background: var(--line); }
+.coach .dots span.ok { background: var(--ok, #2f9e55); }
+.coach .dots span.cur { background: var(--accent); }
+.coach .cs.row { flex-direction: row; flex-wrap: wrap; }
+.coach .cs.row:empty { display: none; }
 
 /* ---------- Panneau de réglages ---------- */
 .props .head { padding: 14px 14px 6px; display: flex; align-items: center; gap: 9px; }
@@ -398,6 +407,8 @@ dialog[open] { animation: rise .2s cubic-bezier(.2, .8, .2, 1); }
 dialog::backdrop { background: #0d121899; backdrop-filter: blur(2px); }
 dialog .dh { padding: 18px 22px 0; font-size: 18px; font-weight: 750; letter-spacing: -.01em; }
 dialog .db { padding: 8px 22px 4px; color: var(--ink2); line-height: 1.55; max-height: 70vh; overflow: auto; }
+dialog .db .field { padding: 6px 0; max-width: 340px; }
+dialog .db .field .calc { font-size: 12px; }
 dialog .db h3 { color: var(--ink); font-size: 14px; margin: 14px 0 4px; }
 dialog .db ul { padding-left: 18px; margin: 4px 0; }
 dialog .df { padding: 12px 22px 18px; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
@@ -473,10 +484,23 @@ table.bom th { font-weight: 650; background: var(--field); }
   .sk-hint { left: 70px; }
   .sheet-wrap { grid-template-columns: 1fr; }
   .coach { display: none; }
+  .coach.defi { display: block; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 /* Valeur affichée près de la souris pendant qu'on tire une flèche */
+/* cotes d'une étape, affichées près de la souris après un double-clic sur la pièce */
+.dimcard { position: absolute; z-index: 6; width: 256px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-m); animation: fadeup .14s ease-out; }
+.dimcard .dc-h { display: flex; align-items: center; gap: 8px; padding: 10px 10px 4px 12px; }
+.dimcard .dc-h .ic { width: 22px; height: 22px; color: var(--accent); flex: none; }
+.dimcard .dc-h .ic svg { width: 100%; height: 100%; }
+.dimcard .dc-h b { flex: 1; font-size: 13.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dimcard .dc-h .x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 6px; }
+.dimcard .dc-h .x:hover { background: var(--field); color: var(--ink); }
+.dimcard .dc-b { max-height: 46vh; overflow: auto; padding: 2px 0; }
+.dimcard .dc-b .field { padding: 4px 12px; }
+.dimcard .dc-none { padding: 6px 12px 4px; font-size: 12.5px; color: var(--ink2); line-height: 1.45; }
+.dimcard .dc-f { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 10px 10px; flex-wrap: wrap; }
 .dragtip { position: fixed; z-index: 60; pointer-events: none; padding: 5px 9px; border-radius: 8px; background: var(--top); color: #fff; font-size: 12.5px; font-weight: 600; box-shadow: var(--shadow); white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* Modèles de départ, sur l'écran d'accueil */
 .welcome .starters { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
@@ -488,4 +512,11 @@ table.bom th { font-weight: 650; background: var(--field); }
 .welcome .starter .si svg { width: 20px; height: 20px; }
 .welcome .starter b { font-size: 12.5px; font-weight: 650; line-height: 1.2; }
 .welcome .starter small { display: none; }
+.welcome .sgrid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.welcome .defis .starter { gap: 4px; padding: 10px 8px 9px; }
+.welcome .defis .starter .si { margin-bottom: 2px; }
+.welcome .defis .starter small { display: block; font-size: 11.5px; color: var(--muted); line-height: 1.25; }
+.welcome .defis .starter.done .si { background: var(--ok-soft, #e2f3e8); color: var(--ok, #2f9e55); }
+.welcome .defis .starter.done small { color: var(--ok, #2f9e55); font-weight: 600; }
+@media (max-width: 760px) { .welcome .sgrid3 { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .welcome .sgrid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

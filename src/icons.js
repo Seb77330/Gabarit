@@ -58,6 +58,8 @@ export const ICONS = {
   eye: s('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
   spark: s('<path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>'),
   pro: s('<circle cx="12" cy="5.5" r="2"/><path d="M11 7.5 6 20M13 7.5 18 20M8.3 15h7.4"/>'),
+  flag: s('<path d="M6 21V4"/><path d="M6 4.5h10.5l-2 3.75 2 3.75H6"/>'),
+  check: s('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
   bulb: s('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1.1 2.2h5c.1-1 .5-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>'),
 };
 // Dessins des formes prêtes.

@@ -8,7 +8,8 @@ import { ICONS, SHAPE_ICONS } from "./icons.js";
 import { evalExpr, varsMap } from "./expr.js";
 import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, toWorld, STD_PLANES, cross, dot, norm, scale } from "./geo.js";
 import { exampleDoc } from "./example.js";
-import { TEMPLATES } from "./templates.js";
+import { TEMPLATES, CHALLENGES } from "./templates.js";
+import { readDrawing, drawingEntities } from "./drawfiles.js";
 import { sheetSVG } from "./drawing.js";
 import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
 import { createAssemblyUI } from "./assembly.js";
@@ -320,7 +321,7 @@ function onWorker(m) {
     viewer.setCog(st.showCog && m.mesh?.cog ? m.mesh.cog : null);
     if (st.firstFit && m.mesh) { viewer.fit([1, -1.3, 0.9]); st.firstFit = false; }
     if (st.editSketch) updateSketchRefs();
-    renderTree(); renderStatus(); renderOverlay(); refreshMarkers();
+    renderTree(); renderStatus(); renderOverlay(); refreshMarkers(); if (doc.defi) renderCoach();
     if (!st.editSketch) renderProps();
     return;
   }
@@ -328,6 +329,7 @@ function onWorker(m) {
   if (m.type === "asmInterf") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.list); return; }
   if (m.type === "drawing") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.views); return; }
   if (m.type === "exported") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.blob); return; }
+  if (m.type === "whose") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.owner); return; }
   if (m.type === "error" && !workerReady) { engineFail(m.message); return; }
   if (m.type === "error" && /Aborted|RuntimeError|memory/i.test(m.message)) { restartWorker(); toast("Le moteur 3D a redémarré après une erreur. Vérifie la dernière valeur saisie."); return; }
   if (m.type === "error") { showBusy(false); st.building = false; const cb = pendingExport.get(m.req); if (cb) { pendingExport.delete(m.req); toast(m.message); } else toast("Erreur du noyau 3D : " + m.message); }
@@ -361,7 +363,7 @@ function doExport(kind) {
   const req = ++exportReq;
   showBusy(true, "Export en cours…");
   const msgs = { step: "Fichier STEP enregistré.", stl: "Fichier STL enregistré, prêt pour ton trancheur.", "3mf": "Fichier 3MF enregistré, prêt pour ton trancheur.", obj: "Fichier OBJ enregistré." };
-  pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind}`); toast(msgs[kind]); });
+  pendingExport.set(req, (blob) => { showBusy(false); download(blob, `${safeName()}.${kind}`); toast(msgs[kind]); if (doc.defi) { doc.defi.exported = true; save(); renderCoach(); } });
   worker.postMessage({ type: "export", req, kind, opts: { fine: true, name: doc.name, down: kind !== "step" ? doc.printDown || null : null } });
 }
 // Pack de publication : tout ce qu'il faut pour partager la pièce sur un site de modèles 3D
@@ -448,7 +450,7 @@ const TOOL_TIPS = {
   loft: "Relier plusieurs esquisses par une forme qui passe de l’une à l’autre",
   sweep: "Faire glisser un profil le long d’un chemin (tuyau, poignée, ressort plat…)",
   draft: "Incliner des faces pour le démoulage",
-  import: "Ajouter un fichier 3D à la pièce : STL, 3MF (Bambu Lab, Prusa…) ou STEP",
+  import: "Ajouter un fichier à la pièce : un modèle 3D (STL, 3MF de Bambu Lab ou Prusa, STEP) ou un dessin (SVG, DXF) qui devient une esquisse",
   shapes: "Poser une forme toute faite : boîte, cylindre, sphère, engrenage, texte…",
   helix: "Créer un ressort (fil enroulé en hélice)",
   thread: "Fileter un axe ou tarauder un trou (vrai filet en 3D)",
@@ -819,6 +821,7 @@ function banner(text, buttons = []) {
 
 // ---------- Arbre de construction ----------
 function select(id) {
+  if (id !== st.sel) closeDimCard();
   if (st.pick && st.pick.featId !== id) stopPick();
   if (id && st.editStart?.id !== id) st.editStart = { id, snap: JSON.stringify(doc) };
   if (!id) st.editStart = null;
@@ -1645,10 +1648,21 @@ function refreshHandles() {
     const move = (keys, origin, labels) => keys.forEach((key, k) => {
       if (plain(f[key]) && origin.every(isFinite)) handleList.push({ id: key, origin, dir: AXV[k], color: HCOL[k], obj: f, key, base: val(f[key]), label: labels[k] });
     });
+    // arcs pour tourner : la pièce tourne d'abord autour de X, puis de Y, puis de Z ; chaque arc est
+    // donc dessiné autour de l'axe tel qu'il se trouve après les rotations suivantes
+    const turn = (origin) => {
+      const r = [val(f.rx), val(f.ry), val(f.rz)]; if (!r.every(isFinite) || !origin.every(isFinite)) return;
+      const rad = (d) => d * Math.PI / 180; const cy = Math.cos(rad(r[1])), sy = Math.sin(rad(r[1])), cz = Math.cos(rad(r[2])), sz = Math.sin(rad(r[2]));
+      const axes = [[cz * cy, sz * cy, -sy], [-sz, cz, 0], [0, 0, 1]]; const from = [axes[1], axes[2], [1, 0, 0]]; // où commence chaque arc (celui de Z reste entre les flèches X et Y)
+      ["rx", "ry", "rz"].forEach((key, k) => {
+        if (plain(f[key])) handleList.push({ id: key, ring: true, origin, dir: axes[k], u: from[k], color: HCOL[k], obj: f, key, base: r[k], unit: "°", label: "Rotation " + "XYZ"[k] });
+      });
+    };
     try {
-      if (f.type === "shape") move(["x", "y", "z"], [val(f.x), val(f.y), val(f.z)], ["X", "Y", "Z"]);
+      if (f.type === "shape") { const o = [val(f.x), val(f.y), val(f.z)]; move(["x", "y", "z"], o, ["X", "Y", "Z"]); turn(o); }
       else if (f.type === "import" && st.info?.[f.id]?.bb) {
-        const bb = st.info[f.id].bb; move(["tx", "ty", "tz"], [0, 1, 2].map((k) => (bb[0][k] + bb[1][k]) / 2), ["Déplacement X", "Déplacement Y", "Déplacement Z"]);
+        const bb = st.info[f.id].bb; const o = [0, 1, 2].map((k) => (bb[0][k] + bb[1][k]) / 2);
+        move(["tx", "ty", "tz"], o, ["Déplacement X", "Déplacement Y", "Déplacement Z"]); turn(o);
       } else if (f.type === "slice" && st.info?.[f.id]?.bb && plain(f.at)) {
         const bb = st.info[f.id].bb; const k = { x: 0, y: 1, z: 2 }[f.axis] ?? 2; const o = [0, 1, 2].map((i) => (bb[0][i] + bb[1][i]) / 2); o[k] = val(f.at);
         handleList.push({ id: "at", origin: o, dir: AXV[k], color: HCOL[k], obj: f, key: "at", base: val(f.at), label: "Coupe" });
@@ -1665,21 +1679,26 @@ function refreshHandles() {
       }
     } catch { handleList = []; }
   }
-  viewer.setHandles(handleList.map(({ id, origin, dir, color }) => ({ id, origin, dir, color })), onHandleDrag);
+  viewer.setHandles(handleList.map(({ id, origin, dir, color, ring, u }) => ({ id, origin, dir, color, ring, u })), onHandleDrag);
 }
 function onHandleDrag(id, delta, phase, e) {
   const hd = handleList.find((x) => x.id === id); if (!hd) return 0;
   const tip = $("#dragTip") || document.body.appendChild(h("div", { id: "dragTip", class: "dragtip" }));
+  if (phase === "cancel") { tip.remove(); return 0; }
   if (phase === "end") { tip.remove(); pushHistory(); renderProps(); requestBuild(0); setTimeout(refreshHandles, 0); return 0; }
-  const step = e.shiftKey ? 0.1 : 1; const k = hd.k || 1;
+  const deg = hd.unit === "°";
+  // au millimètre (au dixième avec Maj) ; les angles par crans de 5° (au degré avec Maj)
+  const step = deg ? (e.shiftKey ? 1 : 5) : e.shiftKey ? 0.1 : 1; const k = hd.k || 1;
   let v = Math.round((hd.base + delta * k) / step) * step; if (hd.min !== undefined) v = Math.max(hd.min, v);
   v = Math.round(v * 1000) / 1000;
-  if (String(v) !== String(hd.obj[hd.key])) {
-    mutate(() => { hd.obj[hd.key] = String(v); }, true);
-    const inp = $(`#props [data-hk="${hd.key}"]`); if (inp) inp.value = String(v);
+  let shown = v; if (deg) { shown = ((v % 360) + 360) % 360; if (shown > 180) shown -= 360; } // un angle reste entre −180° et 180°
+  if (String(shown) !== String(hd.obj[hd.key])) {
+    mutate(() => { hd.obj[hd.key] = String(shown); }, true);
+    const inp = $(`#props [data-hk="${hd.key}"]`); if (inp) inp.value = String(shown);
+    const mk = $(`#dimCard [data-mk="${hd.key}"]`); if (mk) mk.value = String(shown);
     if (hd.obj.type === "slice") renderPlanes();
   }
-  tip.textContent = `${hd.label} : ${nf(v, 2)} mm`; tip.style.left = e.clientX + 16 + "px"; tip.style.top = e.clientY + 14 + "px";
+  tip.textContent = deg ? `${hd.label} : ${nf(shown, 0)}°` : `${hd.label} : ${nf(v, 2)} mm`; tip.style.left = e.clientX + 16 + "px"; tip.style.top = e.clientY + 14 + "px";
   return (v - hd.base) / k;
 }
 
@@ -1766,12 +1785,60 @@ function toggleSection() {
 
 // ---------- Import STEP / STL ----------
 function importFile() {
-  const inp = h("input", { type: "file", accept: ".3mf,.stl,.step,.stp", hidden: true });
-  inp.addEventListener("change", () => { const file = inp.files[0]; if (file) importBlob(file); });
+  const inp = h("input", { type: "file", accept: ".3mf,.stl,.step,.stp,.svg,.dxf", hidden: true });
+  inp.addEventListener("change", () => { const file = inp.files[0]; if (file) (DRAW_EXT.test(file.name) ? importDrawing(file) : importBlob(file)); });
   document.body.append(inp); inp.click(); setTimeout(() => inp.remove(), 60000);
 }
 const b64 = (u8) => { let bin = ""; for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(bin); };
 const MESH_EXT = /\.(3mf|stl|step|stp)$/i;
+const DRAW_EXT = /\.(svg|dxf)$/i;
+// Importe un dessin 2D (SVG ou DXF) : il devient une esquisse à la taille voulue, prête à prendre du volume.
+async function importDrawing(file) {
+  if (isAsm()) { toast("Ouvre une pièce pour importer ce dessin."); return; }
+  if (file.size > 20e6) { toast("Dessin trop gros (20 Mo au maximum)."); return; }
+  let dr;
+  try { dr = readDrawing(file.name, await file.text()); } catch (e) { toast(e?.message?.length < 120 ? e.message : "Ce dessin est illisible."); return; }
+  if (!dr.closed && !dr.open) { toast("Aucun trait trouvé dans ce dessin."); return; }
+  const base = file.name.replace(/\.[^.]+$/, "");
+  const w0 = dr.bb[2] - dr.bb[0], h0 = dr.bb[3] - dr.bb[1]; const byW = w0 > 1e-9;
+  const dlg = $("#dlg"); dlg.innerHTML = "";
+  const wIn = h("input", { type: "text", inputmode: "decimal", id: "drawW", spellcheck: "false", value: String(Math.round((byW ? w0 : h0) * 100) / 100) });
+  const other = h("div", { class: "calc", id: "drawH" });
+  const size = () => { const v = Number(String(wIn.value).trim().replace(",", ".")); return v > 0 && isFinite(v) ? v : NaN; };
+  let here = true;
+  const place = (plane) => {
+    const width = byW ? size() : size() * w0 / (h0 || 1);
+    const sk = { id: newId("f"), type: "sketch", name: nextNameRaw(isSimple() ? "Dessin importé" : "Esquisse importée"), plane, entities: drawingEntities(dr, byW ? width : 0).map((e) => ({ id: newId("e"), ...e })) };
+    if (!byW) { const f = size() / (h0 || 1); for (const e of sk.entities) for (const q of e.pts || []) for (let i = 0; i < q.length; i++) q[i] = String(Math.round(Number(q[i]) * f * 1000) / 1000); }
+    insertFeature(sk); st.editStart = null; st.firstFit = true;
+    if (dr.closed) {
+      // tout de suite en volume : 3 mm d'épaisseur, à régler avec la flèche ou au clavier
+      toolAction("extrude");
+      const f = feat(st.sel); if (f?.type === "extrude" && f.sketch === sk.id) { mutate(() => { f.dist = "3"; }, true); renderProps(); requestBuild(0); }
+      toast(`Dessin importé : ${dr.closed} contour${dr.closed > 1 ? "s" : ""}. Règle l’épaisseur, puis valide.`);
+    } else toast("Dessin importé. Il ne contient que des traits ouverts : ferme un contour pour lui donner du volume.");
+  };
+  const go = () => {
+    if (!(size() > 0)) return; dlg.close();
+    if (!here && !isBlank(doc)) { openTab(emptyDoc()); doc.name = base; $("#docName").value = base; }
+    else if (isBlank(doc)) { doc.name = base; $("#docName").value = base; }
+    if (isBlank(doc) || !st.mesh) place({ kind: "std", name: "dessus", offset: "0" });
+    else choosePlane(place, "Sur quel plan poser ce dessin ?");
+  };
+  const ok = h("button", { class: "btn primary", id: "drawOk", onclick: go }, "Importer");
+  const upd = () => { const v = size(); ok.disabled = !(v > 0); other.textContent = v > 0 && byW && h0 > 1e-9 ? `Hauteur : ${nf(h0 * v / w0)} mm` : v > 0 && !byW ? "" : "Écris une taille plus grande que 0."; };
+  wIn.addEventListener("input", upd); wIn.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); go(); } });
+  const parts = [`${dr.closed} contour${dr.closed > 1 ? "s" : ""} fermé${dr.closed > 1 ? "s" : ""}`];
+  if (dr.open) parts.push(`${dr.open} trait${dr.open > 1 ? "s" : ""} ouvert${dr.open > 1 ? "s" : ""}`);
+  dlg.append(h("div", { class: "dh" }, "Importer un dessin"), h("div", { class: "db" },
+    h("p", {}, `« ${file.name} » : ${parts.join(", ")}. Le dessin devient une esquisse que tu peux épaissir, creuser ou modifier.`),
+    dr.skipped ? h("p", {}, "Les textes, images et blocs du fichier ne sont pas repris : convertis-les en tracés dans ton logiciel de dessin.") : null,
+    h("div", { class: "field" }, h("label", { for: "drawW" }, byW ? "Largeur voulue" : "Hauteur voulue"), h("div", { class: "in" }, wIn, h("span", { class: "unit" }, "mm")), other),
+    isBlank(doc) ? null : h("div", { class: "field" }, h("label", {}, "Où le mettre"), h("div", { class: "seg", id: "drawWhere" },
+      ...[[true, "Dans cette pièce"], [false, "Dans une nouvelle pièce"]].map(([v, t]) => h("button", { class: v ? "on" : "", onclick: (e) => { here = v; for (const b of e.currentTarget.parentNode.children) b.classList.toggle("on", b === e.currentTarget); } }, t)))),
+  ), h("div", { class: "df" }, h("button", { class: "btn", onclick: () => dlg.close() }, "Annuler"), ok));
+  upd(); dlg.showModal(); wIn.select();
+}
 // Importe un fichier 3MF (Bambu Studio, Orca, Prusa…), STL ou STEP dans la pièce ouverte.
 async function importBlob(file) {
   if (isAsm()) { toast("Ouvre une pièce pour importer ce fichier (ou insère-le comme composant)."); return; }
@@ -1906,13 +1973,40 @@ function layoutMode() {
   renderCorner(); renderCoach();
 }
 // Coup de pouce du mode Simple : propose la suite, sans jamais bloquer.
+const defisDone = () => { try { return JSON.parse(pref("gabarit-defis") || "[]"); } catch { return []; } };
+function startChallenge(ch) {
+  setMode("simple", true);
+  openTab({ ...(ch.start ? ch.start() : emptyDoc()), ...(ch.start ? {} : { name: ch.title }), defi: { key: ch.key, step: 0 } });
+  st.firstFit = true;
+}
+function renderChallenge(ch) {
+  const s = { sel: st.sel, ok: !Object.keys(st.errors || {}).length, vol: st.mesh?.volume ?? 0 };
+  let i = Math.min(doc.defi.step || 0, ch.steps.length);
+  if (!st.building) while (i < ch.steps.length) { let ok = false; try { ok = !!ch.steps[i].done(doc, s); } catch { ok = false; } if (!ok) break; i++; }
+  if (i !== doc.defi.step) { doc.defi.step = i; save(); }
+  const done = i >= ch.steps.length; const step = ch.steps[Math.min(i, ch.steps.length - 1)];
+  if (done) { const l = defisDone(); if (!l.includes(ch.key)) setPref("gabarit-defis", JSON.stringify([...l, ch.key])); }
+  const quit = () => { delete doc.defi; save(); renderCoach(); };
+  $(".stage").append(h("div", { id: "coach", class: "coach defi", "data-step": String(i) },
+    h("div", { class: "ct" }, h("i", { html: ICONS[done ? "check" : "flag"] || ICONS.bulb }), done ? "Bravo, défi réussi !" : `Défi : ${ch.title}`,
+      h("button", { class: "x", title: "Quitter le défi", "aria-label": "Quitter le défi", onclick: quit }, "✕")),
+    h("div", { class: "dots", "aria-hidden": "true" }, ch.steps.map((_, k) => h("span", { class: k < i ? "ok" : k === i ? "cur" : "" }))),
+    done ? h("p", {}, "Tu sais maintenant poser une forme, la régler et l’exporter. La pièce est à toi : continue à la modifier si tu veux.")
+      : h("p", {}, h("b", {}, `Étape ${i + 1} sur ${ch.steps.length}. `), step.text),
+    h("div", { class: "cs row" },
+      done ? h("button", { "data-defi": "more", onclick: () => { quit(); welcome(true); } }, "Un autre défi") : null,
+      done ? h("button", { "data-defi": "keep", onclick: quit }, "Continuer cette pièce") : null,
+      !done && step.tool && !st.sel && !st.pick ? h("button", { "data-defi": "show", onclick: () => toolAction(step.tool) }, h("span", { html: ICONS[TOOL_ICON[step.tool] || step.tool] }), "Montre-moi") : null)));
+}
 function renderCoach() {
   $("#coach")?.remove();
+  const ch = !isAsm() && doc.defi && CHALLENGES.find((c) => c.key === doc.defi.key);
+  if (ch && isSimple() && $("#welcome").hidden && !st.editSketch) { renderChallenge(ch); return; }
   if (!isSimple() || isAsm() || st.editSketch || st.sel || st.pick || viewer.pickMode || pref("gabarit-coach") === "0" || !$("#welcome").hidden) return;
   const has = !!st.mesh || doc.features.length > 0;
   const steps = has
     ? [["fillet", "Arrondir les bords"], ["hole", "Percer un trou"], ["shapes", "Ajouter une autre forme"], ["print", "Préparer l’impression 3D"]]
-    : [["shapes", "Poser une forme prête"], ["sketch", "Dessiner ma propre forme"], ["import", "Ouvrir un fichier 3D (STL, 3MF, STEP)"]];
+    : [["shapes", "Poser une forme prête"], ["sketch", "Dessiner ma propre forme"], ["import", "Ouvrir un fichier 3D ou un dessin (STL, 3MF, STEP, SVG, DXF)"]];
   $(".stage").append(h("div", { id: "coach", class: "coach" },
     h("div", { class: "ct" }, h("i", { html: ICONS.bulb }), has ? "Et maintenant ?" : "Par où commencer ?",
       h("button", { class: "x", title: "Masquer ces conseils", "aria-label": "Masquer ces conseils", onclick: () => { setPref("gabarit-coach", "0"); renderCoach(); } }, "✕")),
@@ -1948,12 +2042,15 @@ function welcome(show) {
           cur ? act("play", `Continuer : ${cur}`, "Reprends là où tu t’es arrêté", () => go(() => {}), "primary") : null,
           act("plus", "Nouvelle pièce", isSimple() ? "Pars d’une forme prête ou de ton dessin" : "Commence par une esquisse", () => go(() => { openTab(emptyDoc()); if (!isSimple()) toolAction("sketch"); }), cur ? "" : "primary")),
         h("div", { class: "acts two", style: "margin-top:6px" },
-          act("folder", "Ouvrir un fichier", "Gabarit, STL, 3MF, STEP", () => go(() => $("#fileIn").click())),
+          act("folder", "Ouvrir un fichier", "Gabarit, STL, 3MF, STEP, SVG, DXF", () => go(() => $("#fileIn").click())),
           act("eye", "Voir l’exemple", "Une pièce toute faite", () => go(() => openTab(exampleDoc()))),
           isSimple() ? null : act("asm", "Nouvel assemblage", "Réunir plusieurs pièces", () => go(() => openTab(emptyAsm())))),
         h("div", { class: "starters" }, h("h2", {}, "Modèles de départ"),
           h("div", { class: "sgrid4" }, TEMPLATES.map((t) => h("button", { class: "starter", "data-starter": t.key, title: t.sub, onclick: () => go(() => { openTab(t.doc()); st.firstFit = true; }) },
             h("span", { class: "si", html: ICONS[t.icon] }), h("b", {}, t.title), h("small", {}, t.sub))))),
+        h("div", { class: "starters defis" }, h("h2", {}, "Mini-défis pour débuter (2 minutes chacun)"),
+          h("div", { class: "sgrid3" }, CHALLENGES.map((c) => h("button", { class: "starter" + (defisDone().includes(c.key) ? " done" : ""), "data-defi": c.key, title: c.sub, onclick: () => go(() => startChallenge(c)) },
+            h("span", { class: "si", html: ICONS[c.icon] }), h("b", {}, c.title), h("small", {}, defisDone().includes(c.key) ? "Réussi" : c.sub))))),
         names.length ? h("div", { class: "recents" }, h("h2", {}, "Mes pièces"),
           ...names.map((n) => h("div", { class: "rec" },
             h("button", { class: "rec-open", title: "Ouvrir", onclick: () => go(() => openTab(lib[n])) }, h("b", {}, n), h("span", {}, ` · ${lib[n].features.length} étape(s)`)),
@@ -1982,9 +2079,11 @@ function help() {
   dlg.append(h("div", { class: "dh" }, "Comment ça marche"), h("div", { class: "db", html: fr(`
     <h3>Deux modes</h3><p>En haut à droite, choisis <b>Simple</b> (l’essentiel, des formes prêtes, des mots de tous les jours) ou <b>Expert</b> (tous les outils). Tu peux passer de l’un à l’autre à tout moment, ta pièce ne change pas. Le bouton lune ou soleil change le thème.</p>
     <h3>Formes prêtes</h3><p><b>Formes prêtes</b> pose une boîte, un cylindre, une sphère, un engrenage, un texte… Clique ensuite sur la pièce pour la placer, règle sa taille à gauche, et choisis <b>Ajouter de la matière</b> ou <b>Creuser</b>.</p>
-    <h3>Tout à la souris</h3><p>Quand tu choisis une forme prête, un fichier importé, une extrusion ou une coupe, des <b>flèches</b> apparaissent sur la pièce : tire-les pour déplacer ou pour régler l’épaisseur. La valeur avance au millimètre ; garde <b>Maj</b> enfoncée pour le dixième. Tu peux toujours taper la valeur exacte à gauche.</p>
+    <h3>Tout à la souris</h3><p>Quand tu choisis une forme prête, un fichier importé, une extrusion ou une coupe, des <b>flèches</b> apparaissent sur la pièce : tire-les pour déplacer ou pour régler l’épaisseur. La valeur avance au millimètre ; garde <b>Maj</b> enfoncée pour le dixième. Les <b>arcs</b> de couleur font tourner une forme prête ou un fichier importé, par crans de 5° (au degré près avec Maj). Tu peux toujours taper la valeur exacte à gauche.</p>
+    <h3>Changer une cote sur la pièce</h3><p><b>Double-clique</b> sur une face : l’étape qui l’a faite s’ouvre, et ses cotes s’affichent à côté de la souris. Tape la nouvelle valeur, puis Entrée. Échap annule.</p>
+    <h3>Importer un dessin</h3><p>Ouvre un fichier <b>SVG</b> ou <b>DXF</b> (un logo, un plan) : il devient une esquisse à la largeur que tu choisis, tout de suite épaissie de 3 mm. Les textes d’un SVG doivent d’abord être convertis en tracés dans ton logiciel de dessin.</p>
     <h3>Fichiers d’impression 3D</h3><p>Ouvre un STL ou un 3MF, puis clique sur son étape. <b>Taille</b> l’étire dans un seul sens. <b>Allonger seulement une zone</b> étire le milieu entre deux plans sans déformer les bouts (trous, clips, pas de vis). <b>Coupe à plat</b> enlève tout ce qui dépasse d’un côté d’un plan : pratique pour raccourcir ou retirer un socle.</p>
-    <h3>Modèles de départ</h3><p>Sur l’écran d’accueil, quatre objets tout faits (porte-clés, boîte, crochet, support de téléphone) : ouvre-en un, clique sur ses étapes à gauche et change les tailles ou le texte.</p>
+    <h3>Modèles de départ</h3><p>Sur l’écran d’accueil, quatre objets tout faits (porte-clés, boîte, crochet, support de téléphone) : ouvre-en un, clique sur ses étapes à gauche et change les tailles ou le texte. Juste en dessous, trois <b>mini-défis</b> te guident pas à pas pour fabriquer ton premier objet.</p>
     <h3>1. L’esquisse</h3><p>Clique sur <b>Esquisse</b>, choisis un plan (ou une face de la pièce), puis dessine des rectangles, cercles, rainures, polygones ou un contour libre. Tape les cotes exactes à droite. Une forme placée dans une autre devient un trou.</p>
     <h3>2. Le volume</h3><p><b>Extrusion</b> donne de l’épaisseur, <b>Enlèvement</b> creuse, <b>Révolution</b> fait tourner le profil autour d’un axe (pour les pièces rondes).</p>
     <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
@@ -2005,6 +2104,7 @@ function saveFile() {
   download(blob, `${safeName()}.gabarit`); toast("Pièce enregistrée dans tes téléchargements.");
 }
 async function openFile(file) {
+  if (DRAW_EXT.test(file.name)) { importDrawing(file); return; }
   if (MESH_EXT.test(file.name)) {
     // fichier d'impression 3D ou de CAO : nouvelle pièce qui le reprend
     const dlg = $("#dlg"); if (dlg?.open) dlg.close();
@@ -2083,6 +2183,61 @@ function shortcutBox() {
   m.style.top = Math.max(8, Math.min(mouseAt[1] - r.height / 2, innerHeight - r.height - 8)) + "px";
   setTimeout(() => document.addEventListener("pointerdown", closeMenuOutside, true), 0);
 }
+// Double-clic sur une face : l'étape qui l'a faite s'ouvre, et ses cotes s'affichent à côté de la souris.
+const DIM_ENT = { rect: [["w", "Largeur"], ["h", "Hauteur"], ["r", "Rayon des coins"]], circle: [["d", "Diamètre"]], polygon: [["d", "Diamètre"], ["n", "Nombre de côtés", ""]], slot: [["w", "Largeur"]], ellipse: [["rx", "Demi-axe 1"], ["ry", "Demi-axe 2"]], text: [["h", "Hauteur des lettres"]] };
+function closeDimCard() { $("#dimCard")?.remove(); }
+function dimCard(f, x, y) {
+  closeDimCard();
+  const rows = [];
+  // les cotes de l'étape : les mêmes cases que dans le panneau de gauche, reliées entre elles
+  for (const inp of [...document.querySelectorAll("#props .field input[data-hk]")].slice(0, 6)) {
+    const field = inp.closest(".field"); const label = field?.querySelector("label")?.textContent || ""; const unit = field?.querySelector(".unit")?.textContent || "";
+    const mine = h("input", { type: "text", value: inp.value, spellcheck: "false", inputmode: "decimal", "data-mk": inp.dataset.hk });
+    mine.addEventListener("input", () => { inp.value = mine.value; inp.dispatchEvent(new Event("input")); mine.classList.toggle("bad", inp.classList.contains("bad")); });
+    mine.addEventListener("change", () => inp.dispatchEvent(new Event("change")));
+    rows.push(h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, mine, unit ? h("span", { class: "unit" }, unit) : null)));
+  }
+  // les cotes du dessin d'origine, quand il est simple et sans contraintes
+  const sk = f.sketch ? feat(f.sketch) : null; let more = 0;
+  if (sk && !(sk.constraints || []).length) {
+    const ents = (sk.entities || []).filter((e) => DIM_ENT[e.type] && !e.construction);
+    if (ents.length && ents.length <= 3) for (const e of ents) for (const [key, label, unit] of DIM_ENT[e.type]) {
+      if (key === "r" && !Number(e.r)) continue;
+      rows.push(exprField(`${label} (${ENT_LABELS[e.type].toLowerCase()})`, e, key, unit ?? "mm")); more++;
+    }
+  }
+  const card = h("div", { id: "dimCard", class: "dimcard" },
+    h("div", { class: "dc-h" }, h("span", { class: "ic", html: ICONS[TYPES[f.type].icon] }), h("b", {}, f.name), h("button", { class: "x", title: "Fermer", "aria-label": "Fermer", onclick: closeDimCard }, "✕")),
+    rows.length ? h("div", { class: "dc-b" }, ...rows) : h("div", { class: "dc-b dc-none" }, "Les réglages de cette étape sont dans le panneau de gauche."),
+    h("div", { class: "dc-f" },
+      sk ? h("button", { class: "btn", onclick: () => { closeDimCard(); openSketch(sk.id); } }, isSimple() ? "Modifier le dessin" : "Modifier l’esquisse") : null,
+      h("button", { class: "btn primary", title: "Entrée", onclick: () => { closeDimCard(); validateFeature(); } }, "C’est bon")));
+  card.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.tagName === "INPUT") { e.preventDefault(); e.stopPropagation(); if (e.target.classList.contains("bad")) return; e.target.blur(); closeDimCard(); validateFeature(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeDimCard(); cancelFeature(); }
+  });
+  const host = $(".stage"); host.append(card);
+  const hr = host.getBoundingClientRect(), cr = card.getBoundingClientRect();
+  card.style.left = Math.max(8, Math.min(x - hr.left + 14, hr.width - cr.width - 8)) + "px";
+  card.style.top = Math.max(8, Math.min(y - hr.top - 24, hr.height - cr.height - 8)) + "px";
+  const first = card.querySelector("input[type=text]"); if (first) { first.focus(); first.select(); }
+}
+let whoseBusy = false;
+$("#view").addEventListener("dblclick", (e) => {
+  if (st.editSketch || isAsm() || !st.mesh || st.pick || !workerReady || whoseBusy || viewer.pickMode || extras?.isPrintOpen()) return;
+  const fh = viewer.hitFace(e); if (!fh) return;
+  clearFaceSel(); whoseBusy = true;
+  const req = ++exportReq; const x = e.clientX, y = e.clientY; const stamp = JSON.stringify(doc);
+  pendingExport.set(req, (owner) => {
+    whoseBusy = false;
+    if (stamp !== JSON.stringify(doc) || st.editSketch || st.pick) return; // la pièce a changé entre-temps
+    const f = owner && feat(owner);
+    if (!f) { toast("Je n’ai pas retrouvé l’étape qui a fait cette face. Choisis-la dans la liste à gauche."); return; }
+    clearFaceSel(); select(f.id); dimCard(f, x, y);
+  });
+  setTimeout(() => { if (whoseBusy && pendingExport.has(req)) { pendingExport.delete(req); whoseBusy = false; } }, 20000);
+  worker.postMessage({ type: "whose", req, doc, stopAt: st.stopAt ?? undefined, point: fh.point });
+});
 viewer.onFreeClick = (e) => {
   if (st.editSketch || isAsm() || !st.mesh) { clearFaceSel(); return; }
   const eh = viewer.hitEdge(e); const fh = eh ? null : viewer.hitFace(e);
@@ -2113,10 +2268,14 @@ viewer.onFreeClick = (e) => {
   }
   const n = edges.length + faces.length;
   const host = $(".stage").getBoundingClientRect();
-  const box = h("div", { id: "faceAct", class: "face-act", style: `left:${Math.max(8, Math.min(e.clientX - host.left + 12, host.width - 420))}px;top:${Math.max(8, e.clientY - host.top - 20)}px` },
+  // la barre se met à droite du pointeur ; près du bord, elle passe au-dessus, jamais sous la souris
+  // (sinon le second clic d'un double-clic tomberait sur un de ses boutons)
+  const fx = e.clientX - host.left + 12, fmax = host.width - 420; const fy = e.clientY - host.top;
+  const box = h("div", { id: "faceAct", class: "face-act", style: `left:${Math.max(8, Math.min(fx, fmax))}px;top:${Math.max(8, fy - 20)}px` },
     h("span", { class: "fa-n" }, n > 1 ? `${n} choisies` : edges.length ? "Arête" : "Face"),
     ...btns, h("button", { class: "x", title: "Fermer (Échap)", onclick: () => clearFaceSel() }, "✕"));
   $(".stage").append(box);
+  if (fx > fmax) { const bh = box.getBoundingClientRect().height; box.style.top = (fy - bh - 14 >= 8 ? fy - bh - 14 : fy + 22) + "px"; }
 };
 const asmUI = createAssemblyUI({
   h, $, nf, fr, toast, banner, viewer, newId, showBusy, library, addToLibrary, download, safeName, toggleSection,
@@ -2136,7 +2295,7 @@ const KEYS = {
   hole: "trou percer vis fraisage lamage", fillet: "arrondi arrondir rayon conge", chamfer: "biseau casser angle", shell: "evider creux boite paroi",
   thread: "filet filetage vis taraud taraudage m3 m4 m5 m6 m8 m10 m12", helix: "ressort helice spirale", rib: "renfort raidisseur gousset",
   mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
-  draft: "demoulage incliner", import: "step stl ouvrir modele", measure: "distance cote longueur", section: "couper interieur",
+  draft: "demoulage incliner", import: "step stl ouvrir modele svg dxf logo dessin", measure: "distance cote longueur", section: "couper interieur",
   print: "impression imprimante 3d support surplomb orientation trancheur", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
   shapes: "forme prete primitive boite cube cylindre sphere boule cone tube anneau tore etoile coeur engrenage texte",
 };
@@ -2343,5 +2502,5 @@ typoTree(document.body);
 startWorker();
 extras.openFromHash();
 window.addEventListener("hashchange", () => extras.openFromHash());
-window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, openSketch, exampleDoc, emptyAsm, library, addToLibrary, asmUI };
+window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, openSketch, exampleDoc, emptyAsm, library, addToLibrary, asmUI, showWelcome: () => welcome(true) };
 if ("launchQueue" in window) window.launchQueue.setConsumer(async (p) => { for (const fh of p.files || []) openFile(await fh.getFile()); });
