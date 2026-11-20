@@ -16,7 +16,7 @@ const assert = (c, m) => { if (!c) { console.error("ÉCHEC :", m); process.exitC
   await p.click("text=Nouvelle pièce"); await p.waitForTimeout(400);
   assert(await p.locator("#dlg[open]").count() === 0, "mode Simple : pas de question de plan au départ");
   const tools = await p.locator("#tools .tbtn").allInnerTexts();
-  assert(tools.length === 14 && tools[0].includes("Formes") && tools.some((t) => t.includes("Creuser")), "barre Simple : 14 outils en mots simples");
+  assert(tools.length === 15 && tools[0].includes("Formes") && tools.some((t) => t.includes("Creuser")), "barre Simple : 15 outils en mots simples");
   assert(await p.locator("#coach button[data-coach]").count() === 3, "coup de pouce : 3 pistes pour commencer");
   // chaque forme prête se construit
   const kinds = await G(() => { document.querySelector(".tbtn[data-tool=shapes]").click(); return [...document.querySelectorAll("#shapes [data-shape]")].map((e) => e.dataset.shape); });
@@ -70,7 +70,7 @@ const assert = (c, m) => { if (!c) { console.error("ÉCHEC :", m); process.exitC
   assert(await p.locator("#coach button[data-coach]").count() === 4, "coup de pouce : 4 pistes pour la suite");
   // passage en Expert puis retour, thème sombre gardé au rechargement
   await p.click("#modeSw [data-mode=expert]"); await p.waitForTimeout(300);
-  assert((await p.locator("#tools .tbtn").count()) === 23 && !(await G(() => document.body.classList.contains("simple"))), "mode Expert : 23 outils");
+  assert((await p.locator("#tools .tbtn").count()) === 24 && !(await G(() => document.body.classList.contains("simple"))), "mode Expert : 24 outils");
   assert(await G(() => window.gabarit.doc.features.length) === 3, "changer de mode ne touche pas à la pièce");
   await p.click("[data-act=theme]"); await p.waitForTimeout(300);
   assert(await G(() => document.documentElement.dataset.theme) === "dark", "thème sombre activé");
