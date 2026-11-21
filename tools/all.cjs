@@ -38,11 +38,13 @@ const run = async (servers) => {
   }
   const one = async (f, again) => {
     const t = Date.now();
-    const r = await child([path.join("tools", f + ".cjs")], env, 420000), lines = r.text.split("\n");
+    const r = await child(["--require", path.join(__dirname, "safe-shot.cjs"), path.join("tools", f + ".cjs")], env, 420000), lines = r.text.split("\n");
     // un essai échoue s'il sort avec une erreur, ou s'il a écrit une ligne d'échec
     const marks = lines.filter((l) => /^(FAIL|ÉCHEC)\b|ÉCHECS \d|pageerror/.test(l));
     const failed = r.status !== 0 || marks.length > 0;
     out(`=== ${f} ${failed ? "ÉCHEC" : "ok"}${again ? " au 2ᵉ passage" : ""} (sortie ${r.status === null ? "délai dépassé" : r.status}, ${Math.round((Date.now() - t) / 1000)} s)`);
+    const skipped = lines.filter((l) => /^capture sautée/.test(l));
+    if (skipped.length) out(`    ${skipped.length} capture(s) d'écran sautée(s), sans effet sur le résultat`);
     if (failed) out([...marks, "--- fin de la sortie ---", ...lines.slice(-25)].join("\n"));
     return !failed;
   };

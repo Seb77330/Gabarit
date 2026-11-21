@@ -26,7 +26,7 @@ const { chromium } = require("playwright");
     d.features.push({ id: "x1", type: "extrude", name: "Plot", sketch: "s1", mode: "add", dir: "one", dist: "5" });
     d.features.push({ id: "s2", type: "sketch", name: "Trou", plane: { kind: "std", name: "dessus", offset: "0" }, entities: [{ id: "c2", type: "circle", cx: "12", cy: "0", d: "4" }] });
     d.features.push({ id: "x2", type: "extrude", name: "Trou", sketch: "s2", mode: "cut", dir: "one", dist: "10" });
-    window.gabarit.loadDoc(d);
+    window.gabarit.loadDoc(d); window.gabarit.st.mesh = null; // sans ça, un PC lent lit encore l'ancienne pièce
   });
   await idle(); await p.waitForTimeout(500);
   m = await p.evaluate(() => ({ v: window.gabarit.st.mesh.volume, err: window.gabarit.st.errors }));
