@@ -94,6 +94,8 @@ SolidWorks coûte plusieurs milliers d’euros par an, ne tourne que sur un PC W
 | Pensé pour l’impression 3D : surplombs colorés, pose à plat automatique, export 3MF | SolidWorks vise l’usinage ; ici l’impression 3D est au centre | ✅ v0.7 |
 | Variantes d’une pièce en un clic (familles) | L’équivalent des configurations, sans tableau Excel | ✅ v0.7 |
 | Versions enregistrées avec retour en arrière | Historique sans logiciel de gestion de données | ✅ v0.7 |
+| Essai dans un meuble (case Kallax, niveau de Billy, bac, meuble sur mesure) : la pièce rentre-t-elle, combien on en range, jusqu’où l’agrandir | Dans SolidWorks il faut modéliser le meuble et faire un assemblage ; ici c’est un bouton | ✅ v1.5 |
+| Pas du quadrillage réglable jusqu’à 0,01 mm, commun au sol, aux flèches, aux boutons − et + et au dessin | Un seul réglage, visible à côté de la vue | ✅ v1.5 |
 | Bibliothèque de pièces standard paramétriques (vis, écrous, rondelles, roulements) | Sans abonnement à une bibliothèque | 🗓️ |
 | Assistant qui repère les problèmes (paroi trop fine pour l’impression, trou trop près du bord) | Conseils avant d’imprimer | 🗓️ |
 | Travail à plusieurs en direct | Sans serveur payant : à étudier (pair à pair) | 🗓️ |

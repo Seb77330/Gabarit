@@ -63,7 +63,7 @@ export class Sketcher {
     svg.addEventListener("wheel", (e) => {
       e.preventDefault();
       const p = this.toW(e); const f = Math.exp(-e.deltaY * 0.0015);
-      this.zoom = Math.max(0.05, Math.min(200, this.zoom * f));
+      this.zoom = Math.max(0.05, Math.min(3000, this.zoom * f));
       const q = this.toW(e); this.pan[0] += p[0] - q[0]; this.pan[1] += p[1] - q[1];
       this.render();
     }, { passive: false });
@@ -419,8 +419,10 @@ export class Sketcher {
     const svg = this.svg; while (svg.firstChild) svg.removeChild(svg.firstChild);
     const W = this.W, H = this.H;
     // grille
-    let step = this.snapStep; while (step * this.zoom < 8) step *= step >= 1 ? (String(step)[0] === "1" ? 5 : 2) : 2;
-    const major = step * (String(step)[0] === "5" ? 2 : 5) ;
+    // carreaux : on part du pas choisi et on grossit (1, 5, 10, 50…) tant qu'ils feraient moins de 8 pixels
+    const lead = (x) => Math.round(x / Math.pow(10, Math.floor(Math.log10(x) + 1e-9)));
+    let step = this.snapStep; while (step * this.zoom < 8) step = Number((step * (lead(step) === 5 ? 2 : 5)).toPrecision(6));
+    const major = Number((step * (lead(step) === 5 ? 2 : 5)).toPrecision(6));
     const [u0, v1] = [(-W / 2) / this.zoom + this.pan[0], (H / 2) / this.zoom + this.pan[1]];
     const [u1, v0] = [(W / 2) / this.zoom + this.pan[0], (-H / 2) / this.zoom + this.pan[1]];
     const g = el("g", { class: "grid" }, svg);

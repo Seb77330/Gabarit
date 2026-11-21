@@ -7,14 +7,23 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 const GROUND_VS = `varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`;
 const GROUND_FS = `
 varying vec3 vW;
-uniform float uStep, uFade, uShadow, uSoft, uAlpha;
+uniform float uPas, uFade, uShadow, uSoft, uAlpha;
 uniform vec2 uCenter, uHalf;
 uniform vec3 uLine;
-float grid(vec2 p, float s) { vec2 c = p / s; vec2 g = abs(fract(c - 0.5) - 0.5) / fwidth(c); return 1.0 - min(min(g.x, g.y), 1.0); }
+// Un niveau de carreaux : il apparaît quand ses carreaux font plus de quelques pixels à l'écran, et ses traits
+// se renforcent quand les carreaux sont grands. En zoomant, on descend ainsi jusqu'au pas choisi.
+float grid(vec2 p, float s) {
+  vec2 c = p / s; vec2 fw = max(fwidth(c), vec2(1e-6));
+  vec2 g = abs(fract(c - 0.5) - 0.5) / fw; float line = 1.0 - min(min(g.x, g.y), 1.0);
+  float px = 1.0 / max(fw.x, fw.y);
+  return line * smoothstep(4.0, 12.0, px) * mix(0.17, 0.5, smoothstep(30.0, 260.0, px));
+}
 void main() {
   vec2 p = vW.xy;
   float fade = 1.0 - smoothstep(uFade * 0.3, uFade, length(p - uCenter));
-  float a = max(grid(p, uStep) * 0.2, grid(p, uStep * 10.0) * 0.5) * fade * uAlpha;
+  float a = 0.0; float s = uPas;
+  for (int i = 0; i < 6; i++) { a = max(a, grid(p, s)); s *= 10.0; }
+  a *= fade * uAlpha;
   vec2 q = abs(p - uCenter) - uHalf;
   float sd = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
   float sh = uShadow * (1.0 - smoothstep(-uSoft * 0.25, uSoft, sd));
@@ -63,7 +72,7 @@ export class Viewer {
     this.handles = []; this.handleGroup = null; this.drag = null; this.tmpV = new THREE.Vector3();
     this.ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, side: THREE.DoubleSide, vertexShader: GROUND_VS, fragmentShader: GROUND_FS,
-      uniforms: { uStep: { value: 10 }, uFade: { value: 300 }, uShadow: { value: 0.2 }, uSoft: { value: 20 }, uAlpha: { value: 1 }, uCenter: { value: new THREE.Vector2() }, uHalf: { value: new THREE.Vector2() }, uLine: { value: new THREE.Color(0x6f7a89) } },
+      uniforms: { uPas: { value: 1 }, uFade: { value: 300 }, uShadow: { value: 0.2 }, uSoft: { value: 20 }, uAlpha: { value: 1 }, uCenter: { value: new THREE.Vector2() }, uHalf: { value: new THREE.Vector2() }, uLine: { value: new THREE.Color(0x6f7a89) } },
     }));
     this.ground.renderOrder = -1; this.scene.add(this.ground); this.shadowK = 0.2; this.updateGround();
     this.addAxes();
@@ -87,7 +96,12 @@ export class Viewer {
     this.sketchCam.add(d1.clone(), d2.clone()); this.scene.add(this.sketchCam);
     this.sketchView = null;
     const loop = () => {
-      if (!this.sketchView) this.controls.update();
+      if (!this.sketchView) {
+        this.controls.update();
+        // on peut zoomer de très près (carreaux fins) sans que la pièce soit coupée
+        const d = this.camera.position.distanceTo(this.controls.target), near = Math.max(0.0005, d / 100), far = Math.max(d * 100, d + this.size * 6);
+        if (Math.abs(near - this.camera.near) > near * 0.02 || Math.abs(far - this.camera.far) > far * 0.02) { this.camera.near = near; this.camera.far = far; this.camera.updateProjectionMatrix(); }
+      }
       // le sol disparaît pendant l'esquisse, et s'efface quand on regarde la pièce par-dessous
       const below = this.camera.position.z < this.ground.position.z;
       this.ground.visible = !this.sketchView;
@@ -104,19 +118,21 @@ export class Viewer {
   // Place le sol sous la pièce (ou à Z = 0 quand il n'y a rien) et règle la taille des carreaux.
   updateGround(known) {
     const g = this.ground; if (!g) return;
-    let box = known || null;
+    let box = known || this.furnBox || null;
     if (!box && (this.mesh || this.asm?.size)) box = new THREE.Box3().setFromObject(this.part);
     if (box?.isEmpty()) box = null;
     const size = box ? Math.max(10, box.getSize(new THREE.Vector3()).length()) : 120;
     const c = box ? box.getCenter(new THREE.Vector3()) : new THREE.Vector3();
     const u = g.material.uniforms;
     const step = Math.pow(10, Math.round(Math.log10(size / 14)));
-    u.uStep.value = step; u.uFade.value = Math.max(size * 2.4, step * 14); u.uSoft.value = size * 0.18;
+    u.uFade.value = Math.max(size * 2.4, step * 14); u.uSoft.value = size * 0.18;
     u.uCenter.value.set(c.x, c.y);
     if (box) u.uHalf.value.set((box.max.x - box.min.x) / 2, (box.max.y - box.min.y) / 2); else u.uHalf.value.set(0, 0);
     this.hasBox = !!box;
     g.position.set(c.x, c.y, (box ? box.min.z : 0) - size * 0.0015); g.scale.setScalar(u.uFade.value * 2.2);
   }
+  // Pas du quadrillage (mm) : la taille des plus petits carreaux du sol.
+  setPas(mm) { this.ground.material.uniforms.uPas.value = Math.max(0.001, mm || 1); }
   setTheme(dark) {
     this.dark = !!dark;
     this.ground.material.uniforms.uLine.value.set(dark ? 0xa9b8cc : 0x6f7a89);
@@ -278,6 +294,17 @@ export class Viewer {
   }
   handleDown(e) {
     if (e.button !== 0) return;
+    if (this.onFurnDrag && this.furn && this.mesh) {
+      // dans un meuble : on attrape la pièce et on la fait glisser sur l'étagère
+      this.ray(e); const hit = this.raycaster.intersectObject(this.mesh, false)[0];
+      if (hit) {
+        e.stopImmediatePropagation(); e.preventDefault();
+        this.fdrag = { p0: hit.point.clone(), pid: e.pointerId };
+        try { this.renderer.domElement.setPointerCapture(e.pointerId); } catch { /* pointeur déjà relâché */ }
+        this.renderer.domElement.style.cursor = "grabbing"; this.onFurnDrag(0, 0, "start", e);
+      }
+      return;
+    }
     const g = this.handleAt(e); if (!g) return;
     e.stopImmediatePropagation(); e.preventDefault();
     const o = g.getWorldPosition(new THREE.Vector3());
@@ -315,6 +342,17 @@ export class Viewer {
     this.onHandleHover?.(null, e);
   }
   handleMove(e) {
+    if (this.fdrag) {
+      e.stopImmediatePropagation(); this.ray(e); const r = this.raycaster.ray, p0 = this.fdrag.p0;
+      if (Math.abs(r.direction.z) > 0.03) {
+        const t = (p0.z - r.origin.z) / r.direction.z;
+        if (t > 0) { const q = r.origin.clone().addScaledVector(r.direction, t); this.onFurnDrag(q.x - p0.x, q.y - p0.y, "move", e); }
+      }
+      return;
+    }
+    if (this.onFurnDrag && this.furn && this.mesh && !e.buttons) {
+      this.ray(e); this.renderer.domElement.style.cursor = this.raycaster.intersectObject(this.mesh, false).length ? "grab" : ""; this.clearHover(); e.stopImmediatePropagation(); return;
+    }
     if (this.drag) {
       e.stopImmediatePropagation();
       if (this.drag.ring) {
@@ -344,6 +382,11 @@ export class Viewer {
     if (g) { e.stopImmediatePropagation(); this.clearHover(); }
   }
   handleUp(e) {
+    if (this.fdrag) {
+      e.stopImmediatePropagation(); const d = this.fdrag; this.fdrag = null;
+      try { this.renderer.domElement.releasePointerCapture(d.pid); } catch { /* déjà relâché */ }
+      this.renderer.domElement.style.cursor = ""; this.onFurnDrag?.(0, 0, "end", e); return;
+    }
     if (!this.drag) return;
     e.stopImmediatePropagation();
     const d = this.drag; this.drag = null;
@@ -593,6 +636,42 @@ export class Viewer {
     g.position.set(pl.center[0], pl.center[1], pl.z - Math.max(0.02, this.size * 0.001));
     g.rotation.z = (pl.turn || 0) * Math.PI / 180;
     g.renderOrder = 1; this.plate = g; this.scene.add(g);
+  }
+  // ---------- Essai dans un meuble : un casier ouvert devant, la pièce posée dedans ----------
+  // spec : { size: [largeur, profondeur, hauteur] de l'intérieur (mm), back (fond fermé), quat et pos de la pièce,
+  // ok (elle rentre), copies: [[x, y, z], …] positions des autres exemplaires } ou null pour tout remettre.
+  setFurniture(spec) {
+    if (this.furn) { this.scene.remove(this.furn); this.furn.traverse((o) => { if (o.userData.own) o.geometry?.dispose(); }); for (const m of this.furnMats || []) m.dispose(); this.furn = null; this.furnMats = null; }
+    if (!spec) {
+      this.part.quaternion.identity(); this.part.position.set(0, 0, 0); this.mat.color.set(0xc3ccd7); this.furnBox = null; this.updateGround(); return;
+    }
+    const [W, D, H] = spec.size; const t = Math.max(0.6, Math.min(18, Math.min(W, D, H) / 8));
+    const g = new THREE.Group();
+    const wood = new THREE.MeshStandardMaterial({ color: this.dark ? 0x9a8565 : 0xdcc7a2, roughness: 0.85, metalness: 0, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
+    const line = new THREE.LineBasicMaterial({ color: spec.ok ? (this.dark ? 0xd8c39c : 0x8a6a3c) : 0xdb403a, transparent: true, opacity: 0.95 });
+    this.furnMats = [wood, line];
+    const board = (sx, sy, sz, x, y, z) => {
+      const geo = new THREE.BoxGeometry(sx, sy, sz); const m = new THREE.Mesh(geo, wood); m.position.set(x, y, z); m.userData.own = true; m.renderOrder = 3;
+      const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), line); e.position.copy(m.position); e.userData.own = true; g.add(m, e);
+    };
+    board(W + 2 * t, D, t, 0, 0, -t / 2); board(W + 2 * t, D, t, 0, 0, H + t / 2); // dessous, dessus
+    board(t, D, H, -W / 2 - t / 2, 0, H / 2); board(t, D, H, W / 2 + t / 2, 0, H / 2); // côtés
+    if (spec.back) board(W + 2 * t, t / 3, H + 2 * t, 0, D / 2 + t / 6, H / 2); // fond
+    const q = new THREE.Quaternion(...spec.quat);
+    this.part.quaternion.copy(q); this.part.position.set(...spec.pos);
+    this.mat.color.set(spec.ok ? 0xc3ccd7 : 0xe9968a);
+    if (spec.copies?.length && this.geo) {
+      // les autres exemplaires : pleins, en deux tons alternés pour bien les distinguer
+      const cm = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+      this.furnMats.push(cm);
+      const im = new THREE.InstancedMesh(this.geo, cm, spec.copies.length); const one = new THREE.Vector3(1, 1, 1); const M = new THREE.Matrix4();
+      const tones = [new THREE.Color(0xdde4ec), new THREE.Color(0xaebccb)];
+      spec.copies.forEach((c, i) => { im.setMatrixAt(i, M.compose(new THREE.Vector3(...c.slice(0, 3)), q, one)); im.setColorAt(i, tones[(c[3] || 0) % 2]); });
+      im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.frustumCulled = false; g.add(im);
+    }
+    this.furn = g; this.scene.add(g);
+    this.furnBox = new THREE.Box3(new THREE.Vector3(-W / 2 - t, -D / 2, -t), new THREE.Vector3(W / 2 + t, D / 2 + t, H + t));
+    this.updateGround();
   }
   // ---------- Assemblage : un groupe par composant ----------
   setAssembly(list) {
