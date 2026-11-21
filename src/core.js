@@ -4,6 +4,7 @@ import { evalExpr, varsMap } from "./expr.js";
 import { solveSketch } from "./constraints.js";
 import { objText, threeMF } from "./meshfiles.js";
 import { readStl, writeStl, stretchZone, stretchZones, zoneMap, bakeTris } from "./mesh3mf.js";
+import { IDENT, MOVES, oread, osame, odet, omul, axisAngle } from "./orient.js";
 import FONT from "./texte.ttf";
 let fontReady = null;
 const ensureFont = () => (fontReady ||= R.loadFont(FONT.buffer.slice(FONT.byteOffset, FONT.byteOffset + FONT.byteLength), "gabarit"));
@@ -695,6 +696,54 @@ export async function build(doc, opts = {}) {
         if (!(k > 0.001)) throw new Error("La taille doit être plus grande que 0 %");
         const [lo, hi] = shape.boundingBox.bounds; info[f.id] = { bb: [[...lo], [...hi]] };
         if (Math.abs(k - 1) > 1e-9) shape = shape.scale(k, [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2]]);
+      } else if (f.type === "orient") {
+        // toute la pièce est tournée par quarts de tour (et retournée dans un miroir au besoin) ; elle reste
+        // posée au même endroit : même centre au sol, même niveau
+        need();
+        const m = oread(f.m);
+        const [lo, hi] = shape.boundingBox.bounds; info[f.id] = { bb: [[...lo], [...hi]] };
+        if (!osame(m, IDENT)) {
+          const c = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2]];
+          let s = shape, r = m;
+          if (odet(m) < 0) { s = s.mirror([1, 0, 0], c); r = omul(m, MOVES.miroir); }
+          const { axis, deg } = axisAngle(r);
+          if (deg) s = s.rotate(deg, c, axis);
+          const [l2, h2] = s.boundingBox.bounds; const d = [c[0] - (l2[0] + h2[0]) / 2, c[1] - (l2[1] + h2[1]) / 2, lo[2] - l2[2]];
+          if (d.some((v) => Math.abs(v) > 1e-9)) s = s.translate(d);
+          shape = s;
+        }
+      } else if (f.type === "fit") {
+        // la pièce est étirée, sens par sens, jusqu'à la taille demandée (pour remplir un meuble). Les trois sens
+        // du même facteur : simple changement de taille. Sinon on étire le maillage et on refait un solide.
+        need();
+        const [lo, hi] = shape.boundingBox.bounds; info[f.id] = { bb: [[...lo], [...hi]] };
+        const want = ["x", "y", "z"].map((a) => (f[a] === undefined || f[a] === null || f[a] === "" ? null : evalExpr(f[a], vars)));
+        if (want.some((w) => w !== null && !(w > 0.01))) throw new Error("La taille à remplir doit être plus grande que 0");
+        if (want.some((w) => w !== null)) {
+          const before = doc.features.slice(0, idx).filter((g) => !g.suppressed);
+          const key = JSON.stringify([doc.params, before, want], (kk, v) => (kk === "data" && typeof v === "string" ? v.length : v));
+          let hit = stretchCache.get(f.id);
+          if (!hit || hit.key !== key) {
+            const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
+            const stl = shape.blobSTL({ tolerance: size / 4000, angularTolerance: 0.08, binary: true });
+            const tris = Array.from(readStl(new Uint8Array(await stl.arrayBuffer())));
+            // la vraie boîte de la pièce, lue sur le maillage
+            const a = [Infinity, Infinity, Infinity], b = [-Infinity, -Infinity, -Infinity];
+            for (let i = 0; i < tris.length; i++) { const c = i % 3; if (tris[i] < a[c]) a[c] = tris[i]; if (tris[i] > b[c]) b[c] = tris[i]; }
+            const k = want.map((w, i) => (w === null || !(b[i] - a[i] > 1e-9) ? 1 : w / (b[i] - a[i])));
+            let s2 = null;
+            if (k.every((v) => Math.abs(v - 1) < 1e-9)) s2 = null;
+            else if (Math.abs(k[0] - k[1]) < 1e-9 && Math.abs(k[1] - k[2]) < 1e-9) s2 = shape.clone().scale(k[0], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2]]);
+            else {
+              const o = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2]];
+              for (let i = 0; i < tris.length; i++) { const c = i % 3; tris[i] = o[c] + (tris[i] - o[c]) * k[c]; }
+              s2 = await stlSolid(new Blob([writeStl(tris)]));
+              if (!s2) throw new Error("La pièce n’a pas pu être étirée");
+            }
+            hit = { key, shape: s2 }; stretchCache.set(f.id, hit);
+          }
+          if (hit.shape) shape = hit.shape.clone();
+        }
       } else if (f.type === "stretch") {
         // parties allongées : on travaille sur le maillage de la pièce (les triangles sont coupés aux traits,
         // puis déplacés), et on refait un solide. Sans changement de taille, la pièce n'est pas touchée.

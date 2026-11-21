@@ -587,3 +587,16 @@ table.bom th { font-weight: 650; background: var(--field); }
 .meublebar .seclab { margin-left: 0; text-align: left; font-weight: 600; color: var(--ink); }
 .meublebar .mnote { font-size: 11.5px; color: var(--muted); margin: 0; }
 .pchk.info i { background: #5d7ea6; font-family: Georgia, serif; }
+
+/* Essai dans un meuble : onglets, magasins, aimant */
+.printbar .prow[hidden], .meublebar .mh[hidden], .meublebar label[hidden] { display: none; }
+.meublebar .mtabs button, .meublebar #meubleShops button { flex: none; padding: 5px 12px; white-space: nowrap; }
+.meublebar .mtabs button { font-weight: 600; }
+.meublebar .mh { display: inline-flex; align-items: center; gap: 4px; }
+.meublebar .mgrp { display: inline-flex; align-items: center; gap: 4px; }
+.meublebar .mgrp b { font-size: 12px; margin-right: 2px; }
+.meublebar .btn.on { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--card)); }
+.meublebar #meubleJeu { width: 46px; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); text-align: right; }
+.meublebar .btn:disabled { opacity: .45; cursor: default; }
+.meublebar #meubleSel { max-width: 300px; }
+.btnrow.turns { flex-wrap: wrap; }

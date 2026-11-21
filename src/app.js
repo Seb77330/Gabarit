@@ -17,6 +17,7 @@ import { createAssemblyUI } from "./assembly.js";
 import { sketchDXF } from "./dxf.js";
 import { createExtras } from "./extras.js";
 import { createFurniture } from "./furniture.js";
+import { IDENT, MOVES, omul, oread, osame, odet } from "./orient.js";
 import FONT from "./texte.ttf";
 try { const ff = new FontFace("gabarit-texte", FONT); ff.load().then((f) => { document.fonts.add(f); sketcher?.render(); }).catch(() => {}); } catch { /* aperçu avec la police par défaut */ }
 
@@ -84,6 +85,8 @@ const TYPES = {
   slice: { label: "Coupe à plat", icon: "slice" },
   stretch: { label: "Partie allongée", icon: "stretch" },
   scale: { label: "Taille", icon: "scale" },
+  orient: { label: "Sens de pose", icon: "orient" },
+  fit: { label: "Remplissage", icon: "fill" },
 };
 const MATERIALS = { pla: ["PLA", 1.24], petg: ["PETG", 1.27], abs: ["ABS", 1.04], resine: ["Résine", 1.15], alu: ["Aluminium", 2.7], acier: ["Acier", 7.85], inox: ["Inox", 8.0], laiton: ["Laiton", 8.5], bois: ["Bois (chêne)", 0.75] };
 const STORE = "gabarit-doc-v1";
@@ -730,9 +733,14 @@ function toolAction(k) {
   if (k === "shell") { const f = { id: newId("f"), type: "shell", name: nextName("shell"), t: "2", faces: pre.faces.map((x) => x.p) }; insertFeature(f); startPick("faces", f.id); return; }
   if (k === "scale") {
     if (!st.mesh) { toast("Il faut d’abord une pièce : ouvre un fichier 3D ou pose une forme."); return; }
-    const live = doc.features.slice(0, st.stopAt ?? doc.features.length).filter((g) => !g.suppressed);
-    const f = live.at(-1)?.type === "scale" ? live.at(-1) : null;
-    if (f) select(f.id); else insertFeature({ id: newId("f"), type: "scale", name: nextName("scale"), k: "100" });
+    const f = tailStep("scale");
+    if (f) select(f.id); else insertFeature({ id: newId("f"), type: "scale", name: nextName("scale"), k: "100" }, tailAt("scale"));
+    return;
+  }
+  if (k === "orient") {
+    if (!st.mesh) { toast("Il faut d’abord une pièce : ouvre un fichier 3D ou pose une forme."); return; }
+    const f = tailStep("orient");
+    if (f) select(f.id); else insertFeature({ id: newId("f"), type: "orient", name: nextName("orient"), m: [...IDENT] }, tailAt("orient"));
     return;
   }
   if (k === "stretch") {
@@ -808,13 +816,30 @@ function addShape(kind) {
   else st.firstFit = true;
 }
 function nextNameRaw(base) { let n = 1; const names = new Set(doc.features.map((f) => f.name)); while (names.has(`${base} ${n}`)) n++; return `${base} ${n}`; }
-function insertFeature(f) {
+function insertFeature(f, at = null) {
   const snap = JSON.stringify(doc);
-  mutate((d) => {
-    if (st.stopAt !== null) { d.features.splice(st.stopAt, 0, f); st.stopAt++; }
-    else d.features.push(f);
-  });
+  mutate((d) => { putFeature(d, f, at); });
   select(f.id); st.editStart = { id: f.id, snap, isNew: true };
+}
+function putFeature(d, f, at = null) {
+  if (at !== null) { d.features.splice(at, 0, f); if (st.stopAt !== null) st.stopAt++; }
+  else if (st.stopAt !== null) { d.features.splice(st.stopAt, 0, f); st.stopAt++; }
+  else d.features.push(f);
+}
+// Les étapes qui règlent toute la pièce se rangent à la fin de l'historique, toujours dans cet ordre : le sens de
+// pose, la taille, puis le remplissage d'un meuble. « tailStep » retrouve celle d'un type, « tailAt » dit où en
+// glisser une nouvelle pour garder l'ordre.
+const TAIL = ["orient", "scale", "fit"];
+function tailRange() {
+  const lim = st.stopAt ?? doc.features.length; let i = lim;
+  while (i > 0 && TAIL.includes(doc.features[i - 1].type)) i--;
+  return [i, lim];
+}
+function tailStep(type) { const [a, b] = tailRange(); for (let j = b - 1; j >= a; j--) if (doc.features[j].type === type && !doc.features[j].suppressed) return doc.features[j]; return null; }
+function tailAt(type) {
+  const [a, b] = tailRange(); const rank = TAIL.indexOf(type); let at = a;
+  for (let j = a; j < b; j++) if (TAIL.indexOf(doc.features[j].type) <= rank) at = j + 1;
+  return at;
 }
 function candidateSketch() {
   const s = feat(st.sel); if (s?.type === "sketch") return s;
@@ -1517,6 +1542,33 @@ function drawProps() {
     sync();
     add(h("div", { class: "note" }, "Pour changer un seul sens, ou seulement une partie de la pièce (une tige, un pied, le milieu) :"),
       h("div", { class: "btnrow" }, h("button", { class: "btn", "data-size": "stretch", onclick: () => { validateFeature(); toolAction("stretch"); } }, "Allonger une partie")));
+  }
+  if (f.type === "orient") {
+    // le sens de pose : des gestes en mots simples, qui s'ajoutent les uns aux autres
+    const m = oread(f.m);
+    add(h("div", { class: "note" }, "Tourne toute la pièce, couche-la ou retourne-la. Chaque clic s’ajoute au précédent, et la pièce reste posée au même endroit."));
+    const go = (key, label, title) => h("button", { class: "btn", "data-turn": key, title, onclick: () => { mutate(() => { f.m = key ? omul(MOVES[key], oread(f.m)) : [...IDENT]; }); renderProps(); } }, label);
+    add(h("h2", {}, "Tourner à plat"), h("div", { class: "btnrow turns" }, go("gauche", "Quart de tour à gauche", "90° vers la gauche, vue de dessus"), go("droite", "Quart de tour à droite", "90° vers la droite, vue de dessus"), go("demi", "Demi-tour", "180° : l’avant passe derrière")));
+    add(h("h2", {}, "Coucher ou retourner"), h("div", { class: "btnrow turns" }, go("cote", "Coucher sur le côté", "Bascule de 90° vers la droite : la pièce repose sur son flanc"), go("avant", "Coucher vers l’avant", "Bascule de 90° vers l’avant : la pièce repose sur sa face avant"), go("envers", "Tête en bas", "Le dessus passe dessous")));
+    add(h("h2", {}, "Miroir"), h("div", { class: "btnrow turns" }, go("miroir", "Miroir", "Inverse la gauche et la droite, comme dans un miroir : pratique pour faire la pièce symétrique d’une autre")));
+    add(h("div", { class: "note" + (osame(m, IDENT) ? "" : " ok"), "data-turn-state": "" }, osame(m, IDENT) ? "La pièce est dans le sens où elle a été dessinée." : odet(m) < 0 ? "La pièce est tournée et vue dans un miroir." : "La pièce est tournée."));
+    if (!osame(m, IDENT)) add(h("div", { class: "btnrow" }, go("", "Remettre droit", "Annule tous ces changements de sens")));
+  }
+  if (f.type === "fit") {
+    // le remplissage : une taille visée par sens, vide = ce sens n'est pas étiré
+    add(h("div", { class: "note" }, "La pièce est étirée, sens par sens, jusqu’à la taille donnée. Une case vide : ce sens garde sa taille. Le plus simple est de régler ça dans « Dans un meuble », onglet « Taille et remplissage »."));
+    const mk = (a, label) => {
+      const input = h("input", { type: "text", inputmode: "decimal", spellcheck: "false", autocomplete: "off", "data-ff": a, value: f[a] === null || f[a] === undefined ? "" : String(f[a]).replace(".", ",") });
+      input.addEventListener("input", () => {
+        const raw = input.value.trim(), v = Number(raw.replace(",", ".")); const good = raw === "" || (isFinite(v) && v > 0.01 && v < 100000); input.classList.toggle("bad", !good); if (!good) return;
+        mutate(() => { f[a] = raw === "" ? null : String(Math.round(v * 1000) / 1000); }, true);
+      });
+      input.addEventListener("change", () => pushHistory());
+      const [less, more] = stepButtons(() => (input.isConnected ? input : document.querySelector(`#props [data-ff="${a}"]`)), pasMm, () => pushHistory());
+      return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, less, input, more, h("span", { class: "unit" }, "mm")));
+    };
+    add(mk("x", "Largeur (X)"), mk("y", "Profondeur (Y)"), mk("z", "Hauteur (Z)"));
+    add(h("div", { class: "note" }, "Après cette étape, les formes rondes deviennent de petites facettes très fines."));
   }
   if (f.type === "stretch") {
     const zs = f.zones || [], nums = zoneNums(f), cur = Math.min(st.zoneSel ?? zs.length - 1, zs.length - 1);
@@ -2551,7 +2603,8 @@ function help() {
     <h3>Changer la taille</h3><p>Le bouton <b>Taille</b>, à droite de la vue, agrandit ou réduit toute la pièce : tape « 30 » pour 30 % de plus, ou donne une dimension en millimètres et le reste suit.</p>
     <h3>Annuler</h3><p><b>Ctrl+Z</b> annule la dernière modification, <b>Ctrl+Y</b> la rétablit (ou les deux flèches en haut de l’écran). Ça marche aussi quand le curseur est dans une case : ce que tu viens de taper est défait d’abord, puis les modifications de la pièce, une par une. Un petit mot confirme chaque annulation.</p>
     <h3>Quadrillage fin</h3><p>À droite de la vue, <b>Pas</b> règle la taille des plus petits carreaux, de 10 mm à 0,01 mm. Zoome : les petits carreaux apparaissent sur le sol. Les flèches, les boutons <b>−</b> et <b>+</b> et la grille du dessin avancent de ce pas, et dix fois plus fin avec <b>Maj</b>.</p>
-    <h3>Essayer dans un meuble</h3><p><b>Dans un meuble</b> pose ta pièce dans une case Kallax, un niveau de Billy, un bac ou n’importe quel meuble dont tu tapes les dimensions intérieures. Gabarit dit si elle <b>rentre</b>, combien il reste de place, <b>combien tu peux en ranger</b> et jusqu’où tu peux l’<b>agrandir</b>. Glisse la pièce à la souris pour la déplacer, tourne-la ou couche-la, et change sa taille : la réponse suit. « Garder ce meuble » ajoute le tien à la liste. Les dimensions proposées sont indicatives : vérifie avec un mètre.</p>
+    <h3>Tourner la pièce</h3><p>À droite de la vue, <b>Tourner</b> change le sens de toute la pièce : <b>quart de tour</b> à gauche ou à droite, <b>demi-tour</b>, la <b>coucher</b> sur le côté ou vers l’avant, la mettre <b>tête en bas</b>, ou la passer au <b>miroir</b> (gauche et droite inversées). Chaque clic s’ajoute au précédent, la pièce reste posée au même endroit, et « Remettre droit » annule tout.</p>
+    <h3>Essayer dans un meuble</h3><p><b>Dans un meuble</b> pose ta pièce dans un meuble pour voir si elle <b>rentre</b>, combien il reste de place, <b>combien tu peux en ranger</b> et jusqu’où tu peux l’<b>agrandir</b>. Quatre onglets : <b>Meuble</b> (choisis le magasin, le type, puis le modèle : étagères, bureaux, tablettes, tiroirs, boîtes ; ou tape tes dimensions et clique sur « Garder ce meuble »), <b>Tourner</b> (quart de tour, coucher, miroir, « Trouver le bon sens »), <b>Placer</b> (à gauche, au centre, à droite, devant, au milieu, au fond, ou à un pourcentage précis ; avec l’<b>aimant</b>, la pièce glissée à la souris se colle aux parois et au milieu) et <b>Taille et remplissage</b> (« Remplir » étire la pièce pour qu’elle occupe toute la largeur, la profondeur ou la hauteur du meuble, avec le jeu que tu choisis). Les dimensions marquées « estimées » sont à vérifier avec un mètre.</p>
     <h3>Allonger une partie</h3><p>Pour changer seulement un morceau (le milieu d’une chaise pour en faire un banc, la tige d’une lampe), choisis <b>Allonger</b>, pose <b>deux traits</b> sur la pièce en cliquant deux fois, puis donne la taille de la partie comprise entre les deux, en millimètres ou en pourcentage, ou tire la flèche orange. Le reste de la pièce ne change pas. Tu peux allonger plusieurs parties, en hauteur, en largeur ou en longueur. Après cette étape, les formes rondes deviennent de petites facettes très fines : fais plutôt les arrondis et les trous avant.</p>
     <h3>Onglets</h3><p>Chaque pièce ouverte a son onglet. Un <b>point</b> sur l’onglet signale une pièce modifiée. Quand tu fermes l’onglet, Gabarit te demande si tu veux l’<b>enregistrer</b> : Enregistrer, Ne pas enregistrer ou Annuler.</p>
     <h3>Changer une cote sur la pièce</h3><p><b>Double-clique</b> sur une face : l’étape qui l’a faite s’ouvre, et ses cotes s’affichent à côté de la souris. Tape la nouvelle valeur, puis Entrée. Échap annule.</p>
@@ -2771,18 +2824,31 @@ const extras = createExtras({
   setPrintDown: (g) => { if (g) doc.printDown = g; else delete doc.printDown; pushHistory(); },
   commands: () => commandList(), publish: () => publishPack(),
 });
-// Essai dans un meuble : il règle la taille par la même étape « Taille » que le bouton à côté de la vue.
-function scaleStep() {
-  const live = doc.features.slice(0, st.stopAt ?? doc.features.length).filter((g) => !g.suppressed);
-  return live.at(-1)?.type === "scale" ? live.at(-1) : null;
+// Essai dans un meuble : il règle la taille, le sens de pose et le remplissage par les mêmes étapes que les boutons
+// à côté de la vue (« Taille », « Tourner »), rangées à la fin de l'historique.
+function tailSet(type, make, change, transient = false) {
+  const f = tailStep(type);
+  if (f) mutate(() => change(f), transient);
+  else mutate((d) => { const n = make(); change(n); putFeature(d, n, tailAt(type)); }, transient);
 }
 meuble = createFurniture({
   h, $, fr, nf, toast, viewer, st, markTool, stepButtons, pas: pasMm,
-  getScale: () => { const f = scaleStep(); if (!f) return 100; try { const v = evalExpr(f.k === undefined || f.k === "" ? 100 : f.k, varsMap(doc.params)); return v > 0 ? v : 100; } catch { return 100; } },
-  setScale: (k, transient) => {
-    const v = String(Math.round(k * 1000) / 1000); const f = scaleStep();
-    if (f) mutate(() => { f.k = v; }, transient);
-    else mutate((d) => { const n = { id: newId("f"), type: "scale", name: nextName("scale"), k: v }; if (st.stopAt !== null) { d.features.splice(st.stopAt, 0, n); st.stopAt++; } else d.features.push(n); }, transient);
+  getScale: () => { const f = tailStep("scale"); if (!f) return 100; try { const v = evalExpr(f.k === undefined || f.k === "" ? 100 : f.k, varsMap(doc.params)); return v > 0 ? v : 100; } catch { return 100; } },
+  setScale: (k, transient) => { const v = String(Math.round(k * 1000) / 1000); tailSet("scale", () => ({ id: newId("f"), type: "scale", name: nextName("scale"), k: v }), (f) => { f.k = v; }, transient); },
+  // m : le geste à ajouter (matrice de orient.js), ou null pour remettre la pièce droite
+  turn: (m) => {
+    const f = tailStep("orient");
+    if (!m && !f) return;
+    tailSet("orient", () => ({ id: newId("f"), type: "orient", name: nextName("orient"), m: [...IDENT] }), (g) => { g.m = m ? omul(m, oread(g.m)) : [...IDENT]; });
+    if (st.sel && feat(st.sel)?.type === "orient") renderProps();
+  },
+  // tailles visées [largeur, profondeur, hauteur] en mm, null = ce sens n'est pas étiré
+  getFit: () => { const f = tailStep("fit"); return ["x", "y", "z"].map((a) => { if (!f || f[a] === null || f[a] === undefined || f[a] === "") return null; try { const v = evalExpr(f[a], varsMap(doc.params)); return v > 0 ? v : null; } catch { return null; } }); },
+  setFit: (dims) => {
+    const f = tailStep("fit");
+    if (dims.every((v) => v === null)) { if (f) mutate((d) => { const i = d.features.indexOf(f); d.features.splice(i, 1); if (st.stopAt !== null && i < st.stopAt) st.stopAt--; if (st.sel === f.id) st.sel = null; }); if (f) renderProps(); return; }
+    tailSet("fit", () => ({ id: newId("f"), type: "fit", name: nextName("fit"), x: null, y: null, z: null }), (g) => { ["x", "y", "z"].forEach((a, i) => { g[a] = dims[i] === null ? null : String(dims[i]); }); });
+    if (st.sel && feat(st.sel)?.type === "fit") renderProps();
   },
   commit: () => pushHistory(),
   changed: () => { renderGestures(); renderCoach(); },
@@ -2794,7 +2860,7 @@ const KEYS = {
   thread: "filet filetage vis taraud taraudage m3 m4 m5 m6 m8 m10 m12", helix: "ressort helice spirale", rib: "renfort raidisseur gousset",
   mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
   draft: "demoulage incliner", import: "step stl ouvrir modele svg dxf logo dessin", measure: "distance cote longueur", section: "couper interieur",
-  print: "impression imprimante 3d support surplomb orientation trancheur", meuble: "meuble etagere ikea kallax billy eket besta bac casier rangement ranger rentre tient gridfinity tiroir", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
+  print: "impression imprimante 3d support surplomb orientation trancheur", meuble: "meuble etagere ikea kallax billy eket besta ivar bureau plateau lagkapten micke tablette lack boite trofast samla bac casier rangement ranger rentre tient gridfinity tiroir remplir aimant magasin", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
   scale: "taille agrandir reduire echelle pourcentage plus grand plus petit dimension",
   stretch: "etirer agrandir rallonger allonger raccourcir section zone partie banc tige pied",
   shapes: "forme prete primitive boite cube cylindre sphere boule cone tube anneau tore etoile coeur engrenage texte",
@@ -2807,6 +2873,7 @@ function commandList() {
     { label: "Mode Expert", hint: "Tous les outils", keys: "avance complet solidworks cao", run: () => setMode("expert") },
     { label: "Thème sombre", keys: "nuit noir dark couleur", run: () => applyTheme("dark") },
     { label: "Thème clair", keys: "jour blanc light couleur", run: () => applyTheme("light") });
+  L.push({ label: "Tourner la pièce", hint: "Quart de tour, demi-tour, la coucher, la retourner, miroir", keys: "orientation sens axe 90 180 degres pivoter rotation coucher flanc cote retourner miroir inverser symetrique", when: () => !isAsm() && !st.editSketch, run: () => toolAction("orient") });
   const skKeys = { trim: " couper rogner raccourcir enlever ce qui dépasse ciseaux", fillet: " arrondir coin rayon arrondi", line: " trait droite segment" };
   for (const [k, label] of SK_ALL) L.push({ label: `Esquisse : ${label}`, keys: "dessiner " + k + (skKeys[k] || ""), when: () => !!st.editSketch, run: () => sketcher.setTool(k) });
   const act = (a) => document.querySelector(`[data-act=${a}]`)?.click();
@@ -2902,6 +2969,7 @@ renderTools();
 $("#views").append(
   h("div", { class: "row" }, h("button", { title: "Tout voir (F)", onclick: () => viewer.fit() }, "Recadrer"), h("button", { title: "Vue isométrique (Ctrl 7)", onclick: () => viewer.fit([1, -1.3, 0.9]) }, "3D")),
   h("div", { class: "row" }, h("button", { class: "wide", id: "sizeBtn", title: "Agrandir ou réduire toute la pièce, en % ou en mm", onclick: () => toolAction("scale") }, h("i", { html: ICONS.scale }), "Taille")),
+  h("div", { class: "row" }, h("button", { class: "wide", id: "turnBtn", title: "Tourner toute la pièce : quart de tour, demi-tour, la coucher, la retourner, miroir", onclick: () => toolAction("orient") }, h("i", { html: ICONS.orient }), "Tourner")),
   h("label", { class: "pas", title: "Taille des plus petits carreaux. Les flèches, les boutons − et + et le dessin avancent de ce pas (dix fois plus fin avec Maj)." }, "Pas",
     h("select", { id: "pasSel", onchange: (e) => setPas(Number(e.target.value)) }, PAS.map((v) => h("option", { value: v, selected: v === pasMm() }, pasText(v))))),
 );
