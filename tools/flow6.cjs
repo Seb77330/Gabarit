@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -20,7 +21,7 @@ const { chromium } = require("playwright");
   await p.click(".tbtn[data-tool=insert]"); await p.click("#dlg >> text=Axe");
   await p.waitForFunction(() => window.gabarit.viewer.asm?.size === 2, null, { timeout: 60000 });
   await p.waitForTimeout(300);
-  await p.screenshot({ path: "/tmp/claude-0/shots/40-asm-insert.png" });
+  await p.screenshot({ path: TMP + "/shots/40-asm-insert.png" });
   console.log("comps", JSON.stringify(await G(() => window.gabarit.doc.components.map((c) => [c.name, c.pos, c.rot, c.fixed]))));
   // synthétise des clics sur les faces
   const pick = (comp, test) => G(([comp, test]) => {
@@ -40,7 +41,7 @@ const { chromium } = require("playwright");
   const c1 = await G(() => window.gabarit.doc.components[1]);
   console.log("pin pos", JSON.stringify(c1.pos), JSON.stringify(c1.rot));
   await p.waitForTimeout(300);
-  await p.screenshot({ path: "/tmp/claude-0/shots/41-asm-mated.png" });
+  await p.screenshot({ path: TMP + "/shots/41-asm-mated.png" });
   // interférences : aucune attendue (axe Ø8 dans trou Ø8, posé sur la face)
   await p.click(".tbtn[data-tool=interf]");
   await p.waitForSelector("#dlg[open] >> text=Interférences", { timeout: 60000 });
@@ -52,10 +53,10 @@ const { chromium } = require("playwright");
   console.log("flipped pos", JSON.stringify(await G(() => window.gabarit.doc.components[1].pos)));
   await p.click(".tbtn[data-tool=bom]");
   console.log("bom", await p.locator("#dlg .db").innerText());
-  await p.screenshot({ path: "/tmp/claude-0/shots/42-asm-bom.png" });
+  await p.screenshot({ path: TMP + "/shots/42-asm-bom.png" });
   await p.click("#dlg >> text=Fermer");
   await p.click(".tbtn[data-tool=explode]"); await p.waitForTimeout(200);
-  await p.screenshot({ path: "/tmp/claude-0/shots/43-asm-explode.png" });
+  await p.screenshot({ path: TMP + "/shots/43-asm-explode.png" });
   await p.click(".tbtn[data-tool=explode]");
   // vrai clic souris dans la vue en mode mesure
   await p.click(".tbtn[data-tool=measure]");

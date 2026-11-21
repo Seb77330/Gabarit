@@ -31,6 +31,19 @@ self.onmessage = async (ev) => {
       // quelle étape a fait la face qui passe par ce point ?
       const r = await build(msg.doc, { stopAt: msg.stopAt, probe: msg.point });
       self.postMessage({ type: "whose", req: msg.req, owner: r.owner });
+    } else if (msg.type === "fix") {
+      // plus grande valeur d'un réglage (rayon, épaisseur, angle) pour laquelle l'étape se calcule : recherche par moitiés
+      const d = msg.doc; const idx = d.features.findIndex((f) => f.id === msg.id); const f = d.features[idx];
+      const works = async (v) => { f[msg.key] = String(v); const r = await build(d, { stopAt: idx + 1 }); return !r.errors[msg.id]; };
+      let hi = msg.value, best = null;
+      for (let i = 0, v = hi / 2; i < 7 && best === null; i++, v /= 2) { if (await works(v)) best = v; else hi = v; }
+      if (best !== null) {
+        let lo = best; for (let i = 0; i < 5; i++) { const mid = (lo + hi) / 2; if (await works(mid)) lo = mid; else hi = mid; }
+        // valeur ronde, juste en dessous
+        const step = lo >= 10 ? 0.5 : lo >= 1 ? 0.1 : 0.01; const round = Math.floor(lo / step + 1e-9) * step;
+        best = round > 0 && (await works(round)) ? Math.round(round * 1000) / 1000 : Math.round(lo * 1000) / 1000;
+      }
+      self.postMessage({ type: "fixed", req: msg.req, value: best });
     } else if (msg.type === "asm") {
       const t = performance.now();
       const parts = await buildAssembly(msg.comps);

@@ -1,3 +1,5 @@
+import { checkPrint, fitPlate } from "./printcheck.js";
+
 // Fonctions « mieux que d'habitude » : partage par lien, recherche de commandes, impression 3D, variantes, versions.
 
 // ---------- Partage par lien : la pièce compressée voyage dans l'adresse ----------
@@ -109,33 +111,88 @@ export function createExtras(ctx) {
     for (const n of planes) if (!list.some((q) => q[0] * n[0] + q[1] * n[1] + q[2] * n[2] > 0.999)) list.push(n);
     return list.slice(0, 60);
   }
-  let printOpen = false;
+  // Imprimantes proposées : [clé, nom, largeur, profondeur, hauteur] en mm.
+  const PRINTERS = [
+    ["a1mini", "Bambu Lab A1 mini", 180, 180, 180], ["bambu", "Bambu Lab A1, P1, X1", 256, 256, 256],
+    ["mk4", "Prusa MK4", 250, 210, 220], ["mini", "Prusa Mini", 180, 180, 180],
+    ["ender3", "Creality Ender 3, K1", 220, 220, 250], ["grand", "Grand format", 300, 300, 300], ["autre", "Autre taille", 200, 200, 200],
+  ];
+  const printPrefs = () => {
+    let p = {}; try { p = JSON.parse(localStorage.getItem("gabarit-printer")) || {}; } catch { /* réglage illisible : valeurs par défaut */ }
+    const row = PRINTERS.find((x) => x[0] === p.key) || PRINTERS[1];
+    const size = row[0] === "autre" && Array.isArray(p.size) && p.size.every((x) => x > 0) ? p.size.slice(0, 3) : row.slice(2);
+    return { key: row[0], size, nozzle: [0.2, 0.4, 0.6, 0.8].includes(p.nozzle) ? p.nozzle : 0.4, bridge: [10, 20, 30, 50].includes(p.bridge) ? p.bridge : 30 };
+  };
+  const savePrefs = (p) => { try { localStorage.setItem("gabarit-printer", JSON.stringify(p)); } catch { /* stockage refusé */ } };
+  let printOpen = false, printUpdate = null;
   function printPanel() {
     if (printOpen) { closePrint(); return; }
-    const m = st.mesh; if (!m) { toast("Crée d’abord un volume."); return; }
+    if (!st.mesh) { toast("Crée d’abord un volume."); return; }
     printOpen = true; ctx.markTool("print", true);
-    const d = doc(); const g0 = d.printDown || [0, 0, -1];
     const bar = h("div", { class: "secbar printbar", id: "printbar" });
     const info = h("span", { class: "seclab" });
-    const apply = (g) => {
-      viewer.setPrintView(g); viewer.fit([1, -1.3, 0.9]);
-      const r = overhangArea(m, g);
-      info.textContent = fr(`Surplombs à soutenir : ${nf(r.over / 100, 1)} cm² · appui : ${nf(r.bed / 100, 1)} cm² · hauteur : ${nf(r.height, 1)} mm`);
+    const chips = h("div", { class: "pchecks" });
+    const chip = (key, ok, text) => h("span", { class: "pchk " + (ok ? "ok" : "warn"), "data-chk": key }, h("i", {}, ok ? "✓" : "!"), fr(text));
+    const mm = (x, d = 0) => nf(x, d);
+    // recalcule les contrôles pour l'orientation choisie ; « frame » recadre la vue
+    const update = (frame) => {
+      const m = st.mesh; if (!m) return;
+      const g = doc().printDown || [0, 0, -1]; const pr = printPrefs();
+      const r = checkPrint(m, g, { wall: pr.nozzle * 2, floor: 0.4, bridge: pr.bridge });
+      viewer.setPrintView(g, r.cls);
+      const fit = fitPlate(m.vertices, g, pr.size, viewer.printFrame(g));
+      viewer.setPlate({ size: pr.size, center: fit.center, z: fit.z, turn: fit.turn, swap: fit.swap, ok: fit.fits && !fit.tooHigh });
+      info.textContent = fr(`Surplombs à soutenir : ${nf(r.support / 100, 1)} cm² · appui : ${nf(r.bed / 100, 1)} cm² · hauteur : ${nf(fit.height, 1)} mm`);
+      const list = [];
+      if (fit.tooHigh) list.push(chip("plateau", false, `Plateau : pièce trop haute (${mm(fit.height)} mm pour ${mm(pr.size[2])})`));
+      else if (!fit.fits) list.push(chip("plateau", false, `Plateau : la pièce dépasse (${mm(fit.long)} × ${mm(fit.short)} mm pour ${mm(pr.size[0])} × ${mm(pr.size[1])})`));
+      else if (fit.turn) list.push(chip("plateau", true, `Plateau : la pièce tient en la tournant de ${fit.turn}°`));
+      else list.push(chip("plateau", true, `Plateau : la pièce tient (marge de ${mm(fit.margin)} mm)`));
+      list.push(r.support > 1 ? chip("supports", false, `Supports : ${nf(r.support / 100, 1)} cm² à soutenir`) : chip("supports", true, "Supports : aucun"));
+      if (r.skipped) list.push(chip("parois", false, "Pièce trop détaillée pour contrôler les parois et les ponts"));
+      else {
+        if (r.bridgeLong > 0) list.push(chip("ponts", false, `Ponts : un pont de ${mm(r.bridgeLong)} mm est trop long (maximum ${pr.bridge} mm)`));
+        else if (r.bridgeOk > 2) list.push(chip("ponts", true, `Ponts : le plus long fait ${mm(r.bridgeOk)} mm, ça passe sans support`));
+        if (r.thinArea > 0.2) list.push(chip("parois", false, `Parois : ${r.thinArea < 100 ? mm(r.thinArea) + " mm²" : nf(r.thinArea / 100, 1) + " cm²"} trop fins (le plus fin : ${nf(r.thinMin, 2)} mm, il faut ${nf(pr.nozzle * 2, 1)} mm)`));
+        else list.push(chip("parois", true, "Parois : rien de trop fin"));
+      }
+      chips.replaceChildren(...list);
+      if (frame) viewer.fit([1, -1.3, 0.9], undefined, (bar.offsetHeight + 28) / Math.max(200, $(".stage").clientHeight));
     };
+    printUpdate = update;
     const best = () => {
-      let bestG = null, bs = Infinity;
+      const m = st.mesh; let bestG = null, bs = Infinity;
       for (const g of candidates(m)) { const r = overhangArea(m, g); const sc = r.over - r.bed * 0.05 + r.height * 0.01; if (sc < bs) { bs = sc; bestG = g; } }
       return bestG;
     };
-    bar.append(h("b", {}, "Impression 3D"), h("span", { class: "legend" }, h("i", { style: "background:#5cb873" }), "posé ", h("i", { style: "background:#ee9940" }), "limite ", h("i", { style: "background:#db403a" }), "support"), info,
-      h("button", { class: "btn", onclick: () => { const g = best(); ctx.setPrintDown(g); apply(g); toast("Orientation choisie : le moins de supports possible. Elle sera utilisée pour l’export STL et 3MF."); } }, "Poser à plat automatiquement"),
-      h("button", { class: "btn", onclick: () => { ctx.setPrintDown(null); apply([0, 0, -1]); } }, "Orientation d’origine"),
-      h("button", { class: "btn primary", title: "Fichiers 3MF et STL, 4 images et une fiche, prêts à déposer sur un site de modèles 3D (MakerWorld, Printables…)", onclick: () => ctx.publish() }, "Pack de publication"),
-      h("button", { class: "btn", onclick: closePrint }, "Fermer"));
-    $(".stage").append(bar); apply(g0);
+    // réglages de l'imprimante
+    const pr0 = printPrefs();
+    const sel = (id, title, opts, val, on) => { const e = h("select", { id, title, onchange: () => { on(e.value); update(false); } }, ...opts.map(([v, t]) => h("option", { value: String(v) }, t))); e.value = String(val); return e; };
+    const custom = h("span", { class: "pcustom", hidden: pr0.key !== "autre" });
+    const dims = pr0.size.map((v, i) => { const e = h("input", { type: "number", min: "20", max: "2000", step: "10", value: String(v), title: ["Largeur du plateau (mm)", "Profondeur du plateau (mm)", "Hauteur maximale (mm)"][i], "data-dim": String(i) }); e.addEventListener("change", () => { const p = printPrefs(); const size = dims.map((d) => Math.max(20, Number(d.value) || 0)); savePrefs({ ...p, key: "autre", size }); update(false); }); return e; });
+    custom.append(dims[0], "×", dims[1], "×", dims[2], "mm");
+    const printer = sel("printSel", "Ton imprimante (taille du plateau)", PRINTERS.map((x) => [x[0], x[0] === "autre" ? x[1] : `${x[1]} (${x[2]} × ${x[3]} × ${x[4]})`]), pr0.key, (v) => {
+      const p = printPrefs(); custom.hidden = v !== "autre";
+      savePrefs({ ...p, key: v, size: v === "autre" ? dims.map((d) => Math.max(20, Number(d.value) || 0)) : undefined });
+    });
+    const nozzle = sel("printNozzle", "Diamètre de la buse : une paroi doit faire au moins deux passages", [[0.2, "0,2 mm"], [0.4, "0,4 mm"], [0.6, "0,6 mm"], [0.8, "0,8 mm"]], pr0.nozzle, (v) => savePrefs({ ...printPrefs(), nozzle: Number(v) }));
+    const bridge = sel("printBridge", "Longueur de pont que ton imprimante réussit sans support", [[10, "10 mm"], [20, "20 mm"], [30, "30 mm"], [50, "50 mm"]], pr0.bridge, (v) => savePrefs({ ...printPrefs(), bridge: Number(v) }));
+    const dot = (c, t) => [h("i", { style: "background:" + c }), t + " "];
+    bar.append(
+      h("div", { class: "prow" }, h("b", {}, "Impression 3D"),
+        h("span", { class: "legend" }, ...dot("#5cb873", "posé"), ...dot("#ee9940", "limite"), ...dot("#db403a", "support"), ...dot("#458cde", "pont"), ...dot("#9e5cdb", "paroi fine")),
+        h("span", { class: "grow" }),
+        h("button", { class: "btn", onclick: () => { const g = best(); ctx.setPrintDown(g); update(true); toast("Orientation choisie : le moins de supports possible. Elle sera utilisée pour l’export STL et 3MF."); } }, "Poser à plat automatiquement"),
+        h("button", { class: "btn", onclick: () => { ctx.setPrintDown(null); update(true); } }, "Orientation d’origine"),
+        h("button", { class: "btn primary", title: "Fichiers 3MF et STL, 4 images et une fiche, prêts à déposer sur un site de modèles 3D (MakerWorld, Printables…)", onclick: () => ctx.publish() }, "Pack de publication"),
+        h("button", { class: "btn", onclick: closePrint }, "Fermer")),
+      chips,
+      h("div", { class: "prow" },
+        h("label", {}, "Imprimante ", printer), custom, h("label", {}, "Buse ", nozzle), h("label", {}, "Pont maxi ", bridge), info));
+    $(".stage").append(bar); update(true);
   }
-  function closePrint() { printOpen = false; viewer.setPrintView(null); $("#printbar")?.remove(); ctx.markTool("print", false); viewer.fit(); }
-  function refreshPrint() { if (printOpen && st.mesh) viewer.setPrintView(doc().printDown || [0, 0, -1]); }
+  function closePrint() { printOpen = false; printUpdate = null; viewer.setPrintView(null); $("#printbar")?.remove(); ctx.markTool("print", false); viewer.fit(); }
+  function refreshPrint() { if (printOpen && st.mesh && printUpdate) printUpdate(false); }
 
   // ---------- Variantes (familles de pièces) ----------
   function variantBox() {

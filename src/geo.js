@@ -72,7 +72,9 @@ export function evalEntity(e, vars) {
   }
   if (e.type === "spline") o.closed = !!e.closed;
   if (e.type === "text") o.txt = String(e.txt ?? "");
-  if (hasPts(e.type)) o.pts = (e.pts || []).map((p) => [evalExpr(p[0], vars), evalExpr(p[1], vars), p[2] === undefined || p[2] === "" ? 0 : evalExpr(p[2], vars)]);
+  // un point : X, Y, flèche de l'arc qui part de ce point, rayon de l'arrondi de ce coin
+  const opt = (x) => (x === undefined || x === null || x === "" ? 0 : evalExpr(x, vars));
+  if (hasPts(e.type)) o.pts = (e.pts || []).map((p) => { const q = [evalExpr(p[0], vars), evalExpr(p[1], vars), opt(p[2])]; const r = e.type === "spline" ? 0 : opt(p[3]); if (r > 0) q.push(r); return q; });
   return o;
 }
 
@@ -114,8 +116,8 @@ export function outline(o) {
     const ang = Math.atan2(o.y2 - o.y1, o.x2 - o.x1), r = o.w / 2;
     return [...arcPts(o.x2, o.y2, r, ang - Math.PI / 2, ang + Math.PI / 2, 16), ...arcPts(o.x1, o.y1, r, ang + Math.PI / 2, ang + 1.5 * Math.PI, 16)];
   }
-  if (o.type === "poly") return segPts(o.pts, true);
-  if (o.type === "path") return segPts(o.pts, false);
+  if (o.type === "poly") return segPts(roundCorners(o.pts, true), true);
+  if (o.type === "path") return segPts(roundCorners(o.pts, false), false);
   if (o.type === "text") { const w = textWidth(o.txt, o.h); return [[0, -0.3 * o.h], [w, -0.3 * o.h], [w, 1.02 * o.h], [0, 1.02 * o.h]].map((p) => rot(p, o.a || 0, [o.cx, o.cy])); }
   if (o.type === "ellipse") { const out = []; for (let i = 0; i < 72; i++) { const t = i / 72 * Math.PI * 2; out.push(rot([o.rx * Math.cos(t), o.ry * Math.sin(t)], o.a || 0, [o.cx, o.cy])); } return out; }
   if (o.type === "spline") { const segs = bezierSegs(o.pts, o.closed); const out = [segs[0]?.[0] || o.pts[0]]; for (const [p0, c1, c2, p1] of segs) for (let i = 1; i <= 12; i++) { const t = i / 12, u = 1 - t; out.push([0, 1].map((k) => u * u * u * p0[k] + 3 * u * u * t * c1[k] + 3 * u * t * t * c2[k] + t * t * t * p1[k])); } if (o.closed) out.pop(); return out; }
@@ -152,6 +154,42 @@ export function arcThrough(a, b, s, steps = 16) {
   let sweep = ccw ? norm2(a1 - a0) : -norm2(a0 - a1);
   const out = [];
   for (let i = 1; i < steps; i++) { const t = a0 + sweep * i / steps; out.push([c[0] + R * Math.cos(t), c[1] + R * Math.sin(t)]); }
+  return out;
+}
+// Arrondi d'un coin P entre les points A et B (côtés droits) : points de tangence t1 (vers A) et t2 (vers B),
+// flèche s de l'arc t1 → t2, et longueur t prise sur chaque côté. null si le coin est plat ou le rayon nul.
+export function cornerFillet(P, A, B, r) {
+  const l1 = Math.hypot(A[0] - P[0], A[1] - P[1]), l2 = Math.hypot(B[0] - P[0], B[1] - P[1]); if (l1 < 1e-9 || l2 < 1e-9 || !(r > 0)) return null;
+  const d1 = [(A[0] - P[0]) / l1, (A[1] - P[1]) / l1], d2 = [(B[0] - P[0]) / l2, (B[1] - P[1]) / l2];
+  const phi = Math.acos(Math.max(-1, Math.min(1, d1[0] * d2[0] + d1[1] * d2[1])));
+  if (phi < 1e-3 || Math.PI - phi < 1e-3) return null;
+  const t = r / Math.tan(phi / 2);
+  const t1 = [P[0] + d1[0] * t, P[1] + d1[1] * t], t2 = [P[0] + d2[0] * t, P[1] + d2[1] * t];
+  const left = (t2[0] - t1[0]) * (P[1] - t1[1]) - (t2[1] - t1[1]) * (P[0] - t1[0]) > 0;
+  return { t1, t2, s: (left ? 1 : -1) * r * (1 - Math.sin(phi / 2)), t, l1, l2, max: Math.min(l1, l2) * Math.tan(phi / 2) };
+}
+// Coins arrondis d'un contour à points : chaque point peut porter son rayon (4e valeur), rAll vaut pour les autres.
+// Rend les points avec les arcs en place. Un arrondi qui ne tient pas (côté courbe, côté trop court) est laissé vif.
+export function roundCorners(pts, closed, rAll = 0) {
+  const n = pts.length; if (n < 3 || !(rAll > 0 || pts.some((p) => p[3] > 0))) return pts;
+  const F = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    if (!closed && (i === 0 || i === n - 1)) continue;
+    const r = pts[i][3] > 0 ? pts[i][3] : rAll; if (!(r > 0)) continue;
+    const a = pts[(i - 1 + n) % n], p = pts[i], b = pts[(i + 1) % n];
+    if (a[2] || p[2]) continue;
+    F[i] = cornerFillet(p, a, b, r);
+  }
+  // deux arrondis voisins doivent tenir ensemble sur le côté qu'ils partagent
+  const ok = F.map((f, i) => !!f && f.t + (F[(i - 1 + n) % n]?.t || 0) <= f.l1 + 1e-9 && f.t + (F[(i + 1) % n]?.t || 0) <= f.l2 + 1e-9);
+  const out = [];
+  const put = (q) => { const l = out[out.length - 1]; if (l && Math.hypot(l[0] - q[0], l[1] - q[1]) < 1e-9) out.pop(); out.push(q); };
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    if (!ok[i]) { put([p[0], p[1], p[2] || 0]); continue; }
+    put([F[i].t1[0], F[i].t1[1], F[i].s]); put([F[i].t2[0], F[i].t2[1], 0]);
+  }
+  if (closed && out.length > 1 && Math.hypot(out[0][0] - out[out.length - 1][0], out[0][1] - out[out.length - 1][1]) < 1e-9) out.pop();
   return out;
 }
 export function segPts(pts, closed) {

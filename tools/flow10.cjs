@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -7,11 +8,11 @@ const { chromium } = require("playwright");
   await p.goto("http://localhost:8765/?mode=expert");
   await p.click("text=Voir l’exemple");
   await p.waitForFunction(() => window.gabarit.st.mesh && !window.gabarit.st.building, null, { timeout: 60000 });
-  await p.screenshot({ path: "/tmp/claude-0/shots/60-header.png" });
+  await p.screenshot({ path: TMP + "/shots/60-header.png" });
   // palette
   await p.keyboard.press("Control+k"); await p.keyboard.type("arrondir");
   console.log("palette", (await p.locator(".palette-item b").allInnerTexts()).slice(0, 3));
-  await p.screenshot({ path: "/tmp/claude-0/shots/61-palette.png" });
+  await p.screenshot({ path: TMP + "/shots/61-palette.png" });
   await p.keyboard.press("Escape");
   await p.keyboard.press("Control+k"); await p.keyboard.type("filet"); await p.keyboard.press("Enter"); await p.waitForTimeout(300);
   console.log("thread started", await p.evaluate(() => [window.gabarit.doc.features.at(-1).type, window.gabarit.st.pick?.kind]));
@@ -21,7 +22,7 @@ const { chromium } = require("playwright");
   console.log("print", await p.locator("#printbar .seclab").innerText());
   await p.click("#printbar >> text=Poser à plat automatiquement"); await p.waitForTimeout(300);
   console.log("print auto", await p.locator("#printbar .seclab").innerText(), JSON.stringify(await p.evaluate(() => window.gabarit.doc.printDown)));
-  await p.screenshot({ path: "/tmp/claude-0/shots/62-print.png" });
+  await p.screenshot({ path: TMP + "/shots/62-print.png" });
   const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 60000 }), p.click("[data-act=stl]")]);
   const buf = require("fs").readFileSync(await dl.path()); const n = buf.readUInt32LE(80); let zmin = Infinity;
   for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) zmin = Math.min(zmin, buf.readFloatLE(84 + i * 50 + 12 + k * 12 + 8));

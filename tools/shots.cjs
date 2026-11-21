@@ -1,6 +1,7 @@
 // Captures d'écran pour vérifier le style (clair, sombre, Simple, Expert).
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
-const OUT = "/tmp/claude-0/shots/";
+const OUT = TMP + "/shots/";
 (async () => {
   const b = await chromium.launch();
   const errs = [];

@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -22,7 +23,7 @@ const { chromium } = require("playwright");
   await p.click("#skTools >> text=Contour libre");
   for (const [x, y] of [[-120, -60], [-60, -60], [-90, 0]]) await p.mouse.click(cx + x, cy + y);
   await p.mouse.click(cx - 120, cy - 60);
-  await p.screenshot({ path: "/tmp/claude-0/shots/3-sketch.png" });
+  await p.screenshot({ path: TMP + "/shots/3-sketch.png" });
   const ents = await p.evaluate(() => window.gabarit.doc.features[0].entities);
   console.log("entities", JSON.stringify(ents));
   await p.click("#skTools button[title=Entrée]");
@@ -34,7 +35,7 @@ const { chromium } = require("playwright");
   await inp.fill("15"); await inp.press("Tab");
   await p.waitForTimeout(1500);
   console.log("bb after extrude", JSON.stringify(await p.evaluate(() => window.gabarit.st.mesh.bb)), JSON.stringify(await p.evaluate(() => window.gabarit.st.errors)));
-  await p.screenshot({ path: "/tmp/claude-0/shots/4-extrude.png" });
+  await p.screenshot({ path: TMP + "/shots/4-extrude.png" });
   // congé : cliquer sur une arête projetée
   await p.click(".tbtn[data-tool=fillet]");
   await p.waitForTimeout(1200);
@@ -50,7 +51,7 @@ const { chromium } = require("playwright");
   await p.click("#corner .ok");
   await p.waitForTimeout(2000);
   console.log("errors", JSON.stringify(await p.evaluate(() => window.gabarit.st.errors)), "vol", await p.evaluate(() => window.gabarit.st.mesh.volume));
-  await p.screenshot({ path: "/tmp/claude-0/shots/5-fillet.png" });
+  await p.screenshot({ path: TMP + "/shots/5-fillet.png" });
   // perçage sur la face du dessus
   await p.click(".tbtn[data-tool=hole]");
   await p.click("text=Une face de la pièce…");
@@ -67,12 +68,12 @@ const { chromium } = require("playwright");
   await p.click("#corner .ok");
   await p.waitForTimeout(2000);
   console.log("errors", JSON.stringify(await p.evaluate(() => window.gabarit.st.errors)));
-  await p.screenshot({ path: "/tmp/claude-0/shots/6-hole.png" });
+  await p.screenshot({ path: TMP + "/shots/6-hole.png" });
   // export
   const [dl] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), p.click("[data-act=stl]")]);
-  const path = "/tmp/claude-0/shots/test.stl"; await dl.saveAs(path); console.log("stl", dl.suggestedFilename(), require("fs").statSync(path).size);
+  const path = TMP + "/shots/test.stl"; await dl.saveAs(path); console.log("stl", dl.suggestedFilename(), require("fs").statSync(path).size);
   const [dl2] = await Promise.all([p.waitForEvent("download", { timeout: 30000 }), (async () => { await p.click("[data-act=more]"); await p.click("#dlg .planes button >> nth=0"); })()]);
-  await dl2.saveAs("/tmp/claude-0/shots/test.step"); console.log("step", dl2.suggestedFilename(), require("fs").statSync("/tmp/claude-0/shots/test.step").size);
+  await dl2.saveAs(TMP + "/shots/test.step"); console.log("step", dl2.suggestedFilename(), require("fs").statSync(TMP + "/shots/test.step").size);
   // annuler
   await p.keyboard.press("Control+z"); await p.waitForTimeout(300);
   console.log("after undo feats", await p.evaluate(() => window.gabarit.doc.features.length));

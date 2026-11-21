@@ -1,4 +1,5 @@
 // v1.2 : mini-défis guidés (mode Simple).
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -15,7 +16,7 @@ const { chromium } = require("playwright");
   await p.waitForSelector("#welcome .defis");
   const cards = (await p.locator("#welcome [data-defi]").allInnerTexts()).map((t) => t.replace(/\u2060/g, ""));
   ok(cards.length === 3 && /porte-clés/.test(cards[0]) && /boîte/i.test(cards[1]) && /prénom/.test(cards[2]), "accueil : 3 mini-défis proposés");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-accueil.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-accueil.png" });
 
   // ---- défi 1, joué en entier à la souris et au clavier ----
   await p.click('#welcome [data-defi="porte-cles"]'); await p.waitForTimeout(800);
@@ -29,7 +30,7 @@ const { chromium } = require("playwright");
   ok(await step() === 1, "boîte posée : étape 2");
   await setHk("a", 60); await setHk("b", 20); await setHk("h", 3); await idle();
   ok(await step() === 1, "tailles tapées mais pas encore validées : on reste à l’étape 2");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-defi.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-defi.png" });
   await p.locator('#props [data-hk="h"]').press("Enter"); await idle();
   ok(await step() === 2 && /cylindre/.test(await coach()), "Entrée : étape 3 (le trou)");
   await p.click(".tbtn[data-tool=shapes]"); await p.click("#shapes [data-shape=cyl]"); await p.waitForTimeout(1200); await idle();
@@ -47,7 +48,7 @@ const { chromium } = require("playwright");
   t = await coach();
   ok(/Bravo, défi réussi/.test(t) && await step() === 5, "export fait : « Bravo, défi réussi ! » (" + dl.suggestedFilename() + ")");
   ok(JSON.parse(await G(() => localStorage.getItem("gabarit-defis"))).includes("porte-cles"), "le défi est noté comme réussi");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-defi-bravo.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-defi-bravo.png" });
   // la progression est gardée après une relance
   await p.goto("http://localhost:8765/"); await p.waitForTimeout(1500);
   await p.click("#welcome >> text=Continuer"); await p.waitForTimeout(800);

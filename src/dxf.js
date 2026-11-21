@@ -1,5 +1,5 @@
 // Export DXF (format R12, lisible partout) d'une esquisse : découpe laser, CNC, autres logiciels 2D.
-import { evalEntity, outline } from "./geo.js";
+import { evalEntity, outline, roundCorners } from "./geo.js";
 const n = (v) => (Math.round(v * 1e6) / 1e6).toString();
 function polyline(out, pts, closed, layer, bulges) {
   out.push("0", "POLYLINE", "8", layer, "66", "1", "70", closed ? "1" : "0", "10", "0", "20", "0", "30", "0");
@@ -21,8 +21,9 @@ export function sketchDXF(entities, vars) {
       const closed = o.type === "poly";
       if (closed && o.r > 0) { polyline(out, outline(o), true, layer); continue; }
       // flèche s (à gauche = positive) -> renflement DXF (positif = sens trigo, bombé à droite) : tan(angle/4) = 2s / corde
-      const bul = o.pts.map((p, i) => { const q = o.pts[(i + 1) % o.pts.length]; const c = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1; return p[2] ? (-2 * p[2]) / c : 0; });
-      polyline(out, o.pts, closed, layer, bul); continue;
+      const P = roundCorners(o.pts, closed);
+      const bul = P.map((p, i) => { const q = P[(i + 1) % P.length]; const c = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1; return p[2] ? (-2 * p[2]) / c : 0; });
+      polyline(out, P, closed, layer, bul); continue;
     }
     if (o.type === "slot") {
       const L = Math.hypot(o.x2 - o.x1, o.y2 - o.y1), r = o.w / 2, ux = (o.x2 - o.x1) / L, uy = (o.y2 - o.y1) / L, px = -uy * r, py = ux * r;

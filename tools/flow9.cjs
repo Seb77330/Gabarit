@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -14,12 +15,12 @@ const { chromium } = require("playwright");
   });
   await p.waitForTimeout(500); await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 120000 });
   console.log("text", await p.evaluate(() => [window.gabarit.st.errors, Math.round(window.gabarit.st.mesh.volume)]));
-  await p.screenshot({ path: "/tmp/claude-0/shots/56-text.png" });
+  await p.screenshot({ path: TMP + "/shots/56-text.png" });
   await p.click("#tree >> text=Marquage"); await p.click("#props >> text=Modifier l’esquisse"); await p.waitForTimeout(400);
-  await p.screenshot({ path: "/tmp/claude-0/shots/57-text-sketch.png" });
+  await p.screenshot({ path: TMP + "/shots/57-text-sketch.png" });
   await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=drawing]"); await p.waitForSelector(".sheet svg", { timeout: 60000 }); await p.waitForTimeout(500);
-  await p.screenshot({ path: "/tmp/claude-0/shots/58-drawing-dims.png" });
+  await p.screenshot({ path: TMP + "/shots/58-drawing-dims.png" });
   console.log("LOGS", logs.join("\n"));
   await b.close();
 })();

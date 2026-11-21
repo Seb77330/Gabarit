@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -14,12 +15,12 @@ const { chromium } = require("playwright");
   await p.keyboard.press("Control+a"); await p.keyboard.type("22"); await p.keyboard.press("Enter");
   await p.waitForTimeout(200);
   console.log(JSON.stringify(await p.evaluate(() => window.gabarit.doc.features[0].entities)));
-  await p.screenshot({ path: "/tmp/claude-0/shots/10-dim.png" });
+  await p.screenshot({ path: TMP + "/shots/10-dim.png" });
   await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=revolve]");
   await p.waitForFunction(() => window.gabarit.st.mesh, null, { timeout: 30000 }); await p.waitForTimeout(800);
   console.log("revolve", JSON.stringify(await p.evaluate(() => [window.gabarit.st.errors, window.gabarit.st.mesh.bb])));
-  await p.screenshot({ path: "/tmp/claude-0/shots/11-rev.png" });
+  await p.screenshot({ path: TMP + "/shots/11-rev.png" });
   // coque : face du dessus
   await p.click(".tbtn[data-tool=shell]"); await p.waitForTimeout(1000);
   const q = await p.evaluate(() => { const v = window.gabarit.viewer; const V = v.camera.position.constructor; const [a, b] = v.data.bb; const P = new V((a[0]+b[0])/2*0.0+ (b[0]*0.6), 0, b[2]); P.project(v.camera); const r = v.renderer.domElement.getBoundingClientRect(); return [r.left + (P.x + 1) / 2 * r.width, r.top + (1 - P.y) / 2 * r.height]; });
@@ -27,9 +28,9 @@ const { chromium } = require("playwright");
   await p.click("#corner .ok"); await p.waitForTimeout(400);
   await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 30000 }); await p.waitForTimeout(500);
   console.log("shell", JSON.stringify(await p.evaluate(() => [window.gabarit.doc.features.at(-1).faces, window.gabarit.st.errors, window.gabarit.st.mesh.volume])));
-  await p.screenshot({ path: "/tmp/claude-0/shots/12-shell.png" });
+  await p.screenshot({ path: TMP + "/shots/12-shell.png" });
   // mobile
   await p.setViewportSize({ width: 390, height: 844 }); await p.waitForTimeout(600);
-  await p.screenshot({ path: "/tmp/claude-0/shots/13-mobile.png" });
+  await p.screenshot({ path: TMP + "/shots/13-mobile.png" });
   console.log(logs.join("\n") || "no errors"); await b.close();
 })();

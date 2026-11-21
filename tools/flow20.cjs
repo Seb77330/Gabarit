@@ -1,4 +1,5 @@
 // Mode Simple, formes prêtes (les 12), pose sur une face, creuser, thème sombre.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 const assert = (c, m) => { if (!c) { console.error("ÉCHEC :", m); process.exitCode = 1; } else console.log("ok :", m); };
 (async () => {
@@ -76,7 +77,7 @@ const assert = (c, m) => { if (!c) { console.error("ÉCHEC :", m); process.exitC
   assert(await G(() => document.documentElement.dataset.theme) === "dark", "thème sombre activé");
   await p.reload(); await p.waitForFunction(() => window.gabarit, null, { timeout: 60000 });
   assert(await G(() => document.documentElement.dataset.theme === "dark" && !document.body.classList.contains("simple")), "thème et mode gardés après rechargement");
-  await p.screenshot({ path: "/tmp/claude-0/shots/flow20.png" });
+  await p.screenshot({ path: TMP + "/shots/flow20.png" });
   console.log("erreurs", errs);
   assert(!errs.length, "aucune erreur dans la console");
   await b.close();

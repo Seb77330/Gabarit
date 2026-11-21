@@ -1,4 +1,5 @@
 // v1.2 : importer un dessin SVG ou DXF, qui devient une esquisse puis un volume.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 const fs = require("fs");
 (async () => {
@@ -12,7 +13,7 @@ const fs = require("fs");
   const size = async () => { const B = await G(() => window.gabarit.st.mesh.bb); return [0, 1, 2].map((k) => B[1][k] - B[0][k]); };
   const txt = async (sel) => (await p.locator(sel).innerText()).replace(/[  ]/g, " ");
   const near = (a, e, rel = 0.005) => Math.abs(a - e) <= Math.abs(e) * rel;
-  const SVG = "/tmp/claude-0/fixtures/logo.svg", DXF = "/tmp/claude-0/fixtures/plaque.dxf";
+  const SVG = "tools/fixtures/logo.svg", DXF = "tools/fixtures/plaque.dxf";
   await p.goto("http://localhost:8765/?mode=simple");
   await p.click("#welcome >> text=Nouvelle pièce"); await p.waitForTimeout(400);
 
@@ -24,7 +25,7 @@ const fs = require("fs");
   ok(/textes, images et blocs/.test(t), "le texte du fichier est signalé comme non repris");
   ok((await p.inputValue("#drawW")) === "80" && /Hauteur : 40 mm/.test(await txt("#drawH")), "taille lue dans le fichier : 80 mm de large, 40 mm de haut");
   ok((await p.locator("#drawWhere").count()) === 0, "pièce vide : pas de question « où le mettre »");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-import-dessin.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-import-dessin.png" });
   await p.click("#drawOk"); await idle();
   let F = await G(() => window.gabarit.doc.features);
   const kinds = (F[0]?.entities || []).map((e) => e.type).sort().join();
@@ -38,7 +39,7 @@ const fs = require("fs");
   const c0 = F[0].entities.find((e) => e.type === "circle" && e.d === "12");
   ok(c0 && Number(c0.cx) === -24 && Number(c0.cy) === 0, "le cercle de 12 mm est à sa place, dessin centré sur l’origine : " + JSON.stringify(c0));
   ok(await G(() => window.gabarit.viewer.handles.some((g) => g.userData.hd.id === "dist")), "la flèche d’épaisseur est prête à tirer");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-logo-volume.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-logo-volume.png" });
   await p.keyboard.press("Enter"); await idle();
 
   // ---- DXF dans une nouvelle pièce, à une autre taille ----
@@ -76,11 +77,12 @@ const fs = require("fs");
   ok(F.length === 3 && F[2].type === "sketch", "Échap annule le volume, l’esquisse importée reste");
 
   // ---- fichiers sans dessin ----
-  fs.writeFileSync("/tmp/claude-0/fixtures/vide.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><text x="1" y="5">a</text></svg>');
-  await p.setInputFiles("#fileIn", "/tmp/claude-0/fixtures/vide.svg"); await p.waitForTimeout(700);
+  fs.mkdirSync(TMP + "/fixtures", { recursive: true });
+  fs.writeFileSync(TMP + "/fixtures/vide.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><text x="1" y="5">a</text></svg>');
+  await p.setInputFiles("#fileIn", TMP + "/fixtures/vide.svg"); await p.waitForTimeout(700);
   ok(/Aucun trait trouvé/.test(await txt("#toast")), "SVG sans tracé : message clair");
-  fs.writeFileSync("/tmp/claude-0/fixtures/binaire.dxf", Buffer.from([65, 117, 116, 111, 67, 65, 68, 32, 66, 105, 110, 97, 114, 121, 32, 68, 88, 70, 13, 10, 26, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
-  await p.setInputFiles("#fileIn", "/tmp/claude-0/fixtures/binaire.dxf"); await p.waitForTimeout(700);
+  fs.writeFileSync(TMP + "/fixtures/binaire.dxf", Buffer.from([65, 117, 116, 111, 67, 65, 68, 32, 66, 105, 110, 97, 114, 121, 32, 68, 88, 70, 13, 10, 26, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]));
+  await p.setInputFiles("#fileIn", TMP + "/fixtures/binaire.dxf"); await p.waitForTimeout(700);
   ok(/illisible|Aucun trait/.test(await txt("#toast")), "DXF binaire : message clair (" + (await txt("#toast")) + ")");
   ok(!(await p.locator("#dlg[open]").count()), "aucune fenêtre ouverte après un fichier refusé");
 

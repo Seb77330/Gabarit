@@ -1,4 +1,5 @@
 // v1.1 : couper à plat, et allonger seulement une zone d'un fichier importé.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 const fs = require("fs");
 (async () => {
@@ -37,7 +38,7 @@ const fs = require("fs");
   ok(Math.abs(at - 15) < 0.6, "clic sur la pièce : la coupe se met à cette hauteur (" + at + " mm)");
   await p.fill("#props input >> nth=1", "5"); await p.keyboard.press("Enter"); await idle();
   ok(Math.abs(await vol() - 60 * 30 * 5) < 1 && await G(() => !window.gabarit.st.pick && !window.gabarit.st.sel), "5 mm tapés puis Entrée : étape validée, il reste 60 × 30 × 5");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v11-coupe.png" });
+  await p.screenshot({ path: TMP + "/shots/v11-coupe.png" });
 
   // ---- Allonger une zone d'un fichier importé ----
   // la pièce d'essai : une barre 80 × 20 × 10 avec un trou de 8 mm à chaque bout, exportée en STL puis rouverte
@@ -46,7 +47,7 @@ const fs = require("fs");
   await load([bar, hole("h1", -30), hole("h2", 30)]);
   const v0 = await vol();
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("[data-act=stl]")]);
-  const stl = "/tmp/claude-0/shots/barre.stl"; await dl.saveAs(stl);
+  const stl = TMP + "/shots/barre.stl"; await dl.saveAs(stl);
   ok(fs.statSync(stl).size > 1000, "barre percée exportée en STL");
   await G(() => { const g = window.gabarit; g.loadDoc({ version: 1, name: "Essai", material: "pla", params: [], features: [] }); }); await p.waitForTimeout(600);
   await p.setInputFiles("#fileIn", stl);
@@ -96,7 +97,7 @@ const fs = require("fs");
   ok(Math.abs(B[1][0] - B[0][0] - 100) < 0.01, "« Allonger de » 20 mm : la barre fait 100 mm");
   ok(await G(() => window.gabarit.viewer.planeGroup?.children.length === 4), "les deux plans de la zone sont affichés sur la pièce");
   await G(() => window.gabarit.viewer.fit([1, -1.3, 0.9])); await p.waitForTimeout(500);
-  await p.screenshot({ path: "/tmp/claude-0/shots/v11-zone.png" });
+  await p.screenshot({ path: TMP + "/shots/v11-zone.png" });
   // deuxième choix sur la pièce déjà allongée : les clics sont ramenés aux cotes d'origine
   await p.click("#props >> text=Choisir sur la pièce"); await p.waitForTimeout(200);
   pt = await world([-20, -10, 5]); await p.mouse.click(pt[0], pt[1] - 1); await p.waitForTimeout(300);
