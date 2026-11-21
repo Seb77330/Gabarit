@@ -3,7 +3,7 @@ import * as R from "replicad";
 import { evalExpr, varsMap } from "./expr.js";
 import { solveSketch } from "./constraints.js";
 import { objText, threeMF } from "./meshfiles.js";
-import { readStl, writeStl, stretchZone, bakeTris } from "./mesh3mf.js";
+import { readStl, writeStl, stretchZone, stretchZones, zoneMap, bakeTris } from "./mesh3mf.js";
 import FONT from "./texte.ttf";
 let fontReady = null;
 const ensureFont = () => (fontReady ||= R.loadFont(FONT.buffer.slice(FONT.byteOffset, FONT.byteOffset + FONT.byteLength), "gabarit"));
@@ -408,6 +408,24 @@ function nearestFilter(items, points, tol, shape) {
 
 const AXES = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 const importCache = new Map();
+const stretchCache = new Map(); // parties allongées : le résultat est gardé tant que rien ne change avant
+// Zones d'une étape « Partie allongée », en chiffres (les zones sans effet sont laissées de côté).
+export function stretchList(f, vars) {
+  const zs = [];
+  for (const z of f.zones || []) {
+    const k = { x: 0, y: 1, z: 2 }[z.axis] ?? 2; const a = evalExpr(z.a ?? 0, vars), b = evalExpr(z.b ?? 0, vars), add = evalExpr(z.add || 0, vars);
+    if (!(b > a + 0.01)) throw new Error("Partie à allonger : les deux traits sont au même endroit");
+    if (!(add > -(b - a) + 0.01)) throw new Error("Partie à allonger : on ne peut pas la raccourcir plus que sa taille");
+    if (Math.abs(add) > 1e-9) zs.push({ k, a, b, add });
+  }
+  // deux parties qui se recouvrent ne doivent pas, ensemble, retourner la matière
+  for (let k = 0; k < 3; k++) {
+    const on = zs.filter((z) => z.k === k); if (on.length < 2) continue;
+    const cuts = [...new Set(on.flatMap((z) => [z.a, z.b]))].sort((p, q) => p - q), f = zoneMap(on, k);
+    for (let i = 0; i + 1 < cuts.length; i++) if (!(f(cuts[i + 1]) - f(cuts[i]) > 0.01)) throw new Error("Deux parties à allonger se recouvrent et raccourcissent trop au même endroit");
+  }
+  return zs;
+}
 
 // Transformations d'une répétition (liste de fonctions qui déplacent une copie du solide).
 function patternTransforms(f, vars) {
@@ -670,6 +688,33 @@ export async function build(doc, opts = {}) {
         if (t.some(Boolean)) s = s.translate(t);
         { const [blo, bhi] = s.boundingBox.bounds; info[f.id] = { bb: [[...blo], [...bhi]] }; }
         apply(s, f.mode || "add", f.id);
+      } else if (f.type === "scale") {
+        // toute la pièce grandit ou rétrécit, proportions gardées ; elle reste posée au même endroit
+        need();
+        const k = evalExpr(f.k === undefined || f.k === "" ? 100 : f.k, vars) / 100;
+        if (!(k > 0.001)) throw new Error("La taille doit être plus grande que 0 %");
+        const [lo, hi] = shape.boundingBox.bounds; info[f.id] = { bb: [[...lo], [...hi]] };
+        if (Math.abs(k - 1) > 1e-9) shape = shape.scale(k, [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2]]);
+      } else if (f.type === "stretch") {
+        // parties allongées : on travaille sur le maillage de la pièce (les triangles sont coupés aux traits,
+        // puis déplacés), et on refait un solide. Sans changement de taille, la pièce n'est pas touchée.
+        need();
+        const zs = stretchList(f, vars);
+        { const [lo, hi] = shape.boundingBox.bounds; info[f.id] = { bb: [[...lo], [...hi]] }; }
+        if (zs.length) {
+          const before = doc.features.slice(0, idx).filter((g) => !g.suppressed);
+          const key = JSON.stringify([doc.params, before, zs], (kk, v) => (kk === "data" && typeof v === "string" ? v.length : v));
+          let hit = stretchCache.get(f.id);
+          if (!hit || hit.key !== key) {
+            const [lo, hi] = shape.boundingBox.bounds; const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
+            const stl = shape.blobSTL({ tolerance: size / 4000, angularTolerance: 0.08, binary: true });
+            const tris = stretchZones(readStl(new Uint8Array(await stl.arrayBuffer())), zs);
+            const s2 = await stlSolid(new Blob([writeStl(tris)]));
+            if (!s2) throw new Error("Cette partie n’a pas pu être allongée");
+            hit = { key, shape: s2 }; stretchCache.set(f.id, hit);
+          }
+          shape = hit.shape.clone();
+        }
       } else if (f.type === "slice") {
         // coupe à plat : on enlève tout ce qui dépasse d'un côté d'un plan perpendiculaire à X, Y ou Z
         need();

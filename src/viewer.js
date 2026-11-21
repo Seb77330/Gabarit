@@ -312,6 +312,7 @@ export class Viewer {
     }
     try { this.renderer.domElement.setPointerCapture(e.pointerId); } catch { /* pointeur déjà relâché */ }
     this.renderer.domElement.style.cursor = "grabbing";
+    this.onHandleHover?.(null, e);
   }
   handleMove(e) {
     if (this.drag) {
@@ -336,6 +337,7 @@ export class Viewer {
     if (g !== this.hotHandle) {
       if (this.hotHandle) this.hotHandle.userData.mat.color.setHex(this.hotHandle.userData.color);
       this.hotHandle = g; if (g) g.userData.mat.color.setHex(0xffb020);
+      this.onHandleHover?.(g ? g.userData.hd.id : null, e);
       if (!this.pickMode) this.renderer.domElement.style.cursor = g ? "grab" : "";
       else if (g) this.renderer.domElement.style.cursor = "grab"; else this.renderer.domElement.style.cursor = "crosshair";
     }
@@ -499,7 +501,7 @@ export class Viewer {
     if (this.planeGroup) this.scene.remove(this.planeGroup);
     this.planeGroup = new THREE.Group();
     for (const p of list) {
-      const s = p.size / 2; const o = new THREE.Vector3(...p.origin), x = new THREE.Vector3(...p.x).multiplyScalar(s), y = new THREE.Vector3(...p.y).multiplyScalar(s);
+      const o = new THREE.Vector3(...p.origin), x = new THREE.Vector3(...p.x).multiplyScalar((p.w ?? p.size) / 2), y = new THREE.Vector3(...p.y).multiplyScalar((p.h ?? p.size) / 2); // w, h : plan rectangulaire
       const c = [o.clone().sub(x).sub(y), o.clone().add(x).sub(y), o.clone().add(x).add(y), o.clone().sub(x).add(y)];
       const g = new THREE.BufferGeometry().setFromPoints([c[0], c[1], c[2], c[0], c[2], c[3]]);
       const col = p.active ? 0xc4552b : 0x2f6fb5;

@@ -342,6 +342,30 @@ export function stretchZone(tris, k, a, b, add) {
   return t;
 }
 
+// Plusieurs parties allongées en même temps. Chaque zone { k, a, b, add } est donnée dans le repère d'avant :
+// le long de l'axe k, un point c devient c + la somme des « add » déjà franchis (en entier après b, en
+// proportion entre a et b). Deux zones sur des axes différents ne se gênent pas.
+export const zoneMap = (zones, k) => {
+  const zs = zones.filter((z) => z.k === k);
+  return (c) => { let o = c; for (const z of zs) o += z.add * Math.max(0, Math.min(1, (c - z.a) / (z.b - z.a))); return o; };
+};
+// L'inverse : où était, avant, le point qui se trouve maintenant en c (la fonction ci-dessus est croissante).
+export const zoneUnmap = (zones, k) => {
+  const f = zoneMap(zones, k), span = zones.filter((z) => z.k === k).reduce((t, z) => t + Math.abs(z.add), 0);
+  return (c) => { if (!span) return c; let lo = c - span - 1, hi = c + span + 1; for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (f(m) < c) lo = m; else hi = m; } return (lo + hi) / 2; };
+};
+export function stretchZones(tris, zones) {
+  let t = tris;
+  for (const z of zones) t = splitAt(splitAt(t, z.k, z.a), z.k, z.b);
+  if (t === tris) t = Array.from(tris);
+  for (let k = 0; k < 3; k++) {
+    if (!zones.some((z) => z.k === k)) continue;
+    const f = zoneMap(zones, k);
+    for (let i = k; i < t.length; i += 3) t[i] = f(t[i]);
+  }
+  return t;
+}
+
 // Applique au maillage l'échelle puis les rotations autour du centre (comme le fait le noyau sur
 // un solide) ; la pièce reste posée au même niveau. Renvoie les triangles et la boîte englobante.
 export function bakeTris(src, sc, rot) {

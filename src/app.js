@@ -1,7 +1,7 @@
 // Gabarit : application principale (interface, historique, échanges avec le noyau 3D).
 import { Viewer } from "./viewer.js";
 import { Sketcher, newId, circle3 } from "./sketcher.js";
-import { read3mf, toStl, simplify, readStl } from "./mesh3mf.js";
+import { read3mf, toStl, simplify, readStl, zoneMap, zoneUnmap } from "./mesh3mf.js";
 import { zipStore } from "./meshfiles.js";
 const MAX_TRIS = 20000;
 import { ICONS, SHAPE_ICONS } from "./icons.js";
@@ -81,6 +81,8 @@ const TYPES = {
   helix: { label: "Ressort", icon: "helix" },
   shape: { label: "Forme", icon: "shape" },
   slice: { label: "Coupe à plat", icon: "slice" },
+  stretch: { label: "Partie allongée", icon: "stretch" },
+  scale: { label: "Taille", icon: "scale" },
 };
 const MATERIALS = { pla: ["PLA", 1.24], petg: ["PETG", 1.27], abs: ["ABS", 1.04], resine: ["Résine", 1.15], alu: ["Aluminium", 2.7], acier: ["Acier", 7.85], inox: ["Inox", 8.0], laiton: ["Laiton", 8.5], bois: ["Bois (chêne)", 0.75] };
 const STORE = "gabarit-doc-v1";
@@ -136,23 +138,65 @@ function addToLibrary(d) {
   const lib = library(); lib[d.name || "Pièce sans nom"] = { ...JSON.parse(JSON.stringify(d)), savedAt: Date.now() };
   try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* stockage plein */ }
 }
+function setLib(fn) { const lib = library(); fn(lib); try { localStorage.setItem(LIB, JSON.stringify(lib)); } catch { /* stockage plein */ } }
+// Deux enregistrements de la même pièce ? (la date d'enregistrement ne compte pas)
+const sameDoc = (a, b) => { const strip = (x) => { const { savedAt: _s, ...r } = x || {}; return JSON.stringify(r); }; return strip(a) === strip(b); };
 // ---------- Onglets : plusieurs pièces ouvertes, comme des pages ----------
+// Chaque onglet retient : dirty (modifié depuis l'ouverture ou le dernier enregistrement), base (« lib » :
+// la pièce vient de « Mes pièces », « new » : elle n'y était pas), baseName (son nom à l'ouverture) et wrote
+// (les noms sous lesquels l'enregistrement automatique l'a rangée). Un onglet sans « base » date d'avant la v1.4.
 const TABS = "gabarit-tabs";
 let tabs = { list: [], active: null };
 try { tabs = JSON.parse(localStorage.getItem(TABS) || "null") || tabs; } catch { /* rien */ }
 const tabKey = (id) => "gabarit-tab-" + id;
+const baseKey = (id) => "gabarit-base-" + id; // la version de « Mes pièces » à l'ouverture, pour y revenir
+const curTab = () => tabs.list.find((x) => x.id === tabs.active);
 const isBlank = (d) => d && d.kind !== "assembly" && !(d.features || []).length && !(d.params || []).length;
 function saveTabs() { try { localStorage.setItem(TABS, JSON.stringify(tabs)); } catch { /* stockage plein */ } }
 function stashActive() {
-  const t = tabs.list.find((x) => x.id === tabs.active); if (!t) return;
+  const t = curTab(); if (!t) return;
+  flushLib();
   t.name = doc.name; try { localStorage.setItem(tabKey(t.id), JSON.stringify(doc)); } catch { /* stockage plein */ }
+}
+function tabDoc(id) { if (id === tabs.active) return doc; try { return JSON.parse(localStorage.getItem(tabKey(id)) || "null"); } catch { return null; } }
+// Enregistrement automatique dans « Mes pièces » : seulement une pièce modifiée (ou un onglet d'avant la v1.4).
+function autoLib() {
+  const t = curTab(); if (isAsm() || isBlank(doc) || (t && t.base !== undefined && !t.dirty)) return;
+  addToLibrary(doc);
+  const n = doc.name || "Pièce sans nom";
+  if (t && !(t.wrote || []).includes(n)) { t.wrote = [...(t.wrote || []), n]; saveTabs(); }
+}
+function flushLib() { clearTimeout(libTimer); autoLib(); }
+// La pièce de l'onglet actif vient de changer : un point sur l'onglet, et la question à la fermeture.
+function markDirty() {
+  const t = curTab(); if (!t || t.dirty || t.base === undefined) return;
+  t.dirty = true;
+  if (t.base === "lib") { const old = library()[t.baseName]; try { if (old) localStorage.setItem(baseKey(t.id), JSON.stringify(old)); } catch { /* stockage plein : pas de retour possible */ } }
+  saveTabs(); renderTabs();
+}
+// Un nom libre : ni celui d'un autre onglet, ni celui d'une autre pièce rangée dans « Mes pièces ».
+function freeName(base, d, skipTab) {
+  const lib = library();
+  const taken = (n) => tabs.list.some((t) => t.id !== skipTab && t.name === n) || (lib[n] && !(d && sameDoc(lib[n], d)));
+  if (!taken(base)) return base;
+  let i = 2; while (taken(`${base} ${i}`)) i++;
+  return `${base} ${i}`;
 }
 // Ouvre d dans un nouvel onglet (ou dans l'onglet actuel s'il est vide).
 function openTab(d) {
-  const cur = tabs.list.find((x) => x.id === tabs.active);
-  if (cur && isBlank(doc)) { cur.name = d.name; saveTabs(); loadDoc(d); renderTabs(); return; }
+  const cur = curTab(), reuse = cur && isBlank(doc);
+  if (!isBlank(d) && d.kind !== "assembly") {
+    const n = d.name || "Pièce sans nom", lib = library();
+    // déjà ouverte dans un autre onglet : on y va, sans l'ouvrir deux fois
+    const open = lib[n] && sameDoc(lib[n], d) && tabs.list.find((t) => t.name === n && !(t.id === tabs.active && isBlank(doc)));
+    if (open) { if (open.id !== tabs.active) switchTab(open.id); return; }
+    const free = freeName(n, d, reuse ? cur.id : null); if (free !== n) d = { ...d, name: free };
+  }
+  const inLib = d.kind !== "assembly" && !isBlank(d) && !!library()[d.name];
+  const meta = { name: d.name || "Pièce sans nom", dirty: false, base: inLib ? "lib" : "new", baseName: d.name || "Pièce sans nom", wrote: inLib ? [d.name] : [] };
+  if (reuse) { Object.assign(cur, meta); try { localStorage.removeItem(baseKey(cur.id)); } catch { /* rien */ } saveTabs(); loadDoc(d); renderTabs(); return; }
   stashActive();
-  const id = newId("t"); tabs.list.push({ id, name: d.name || "Pièce sans nom" }); tabs.active = id; saveTabs();
+  const id = newId("t"); tabs.list.push({ id, ...meta }); tabs.active = id; saveTabs();
   loadDoc(d); save(); renderTabs();
 }
 function switchTab(id) {
@@ -161,18 +205,82 @@ function switchTab(id) {
   stashActive(); let d = null; try { d = JSON.parse(localStorage.getItem(tabKey(id)) || "null"); } catch { d = null; }
   tabs.active = id; saveTabs(); loadDoc(d || emptyDoc()); save(); renderTabs();
 }
-function closeTab(id) {
+// Retire l'onglet, sans rien demander ni toucher à « Mes pièces ».
+function dropTab(id) {
   const i = tabs.list.findIndex((x) => x.id === id); if (i < 0) return;
-  if (id === tabs.active && !isAsm()) addToLibrary(doc);
-  const name = tabs.list[i].name;
-  tabs.list.splice(i, 1); try { localStorage.removeItem(tabKey(id)); } catch { /* rien */ }
+  tabs.list.splice(i, 1); try { localStorage.removeItem(tabKey(id)); localStorage.removeItem(baseKey(id)); } catch { /* rien */ }
   if (id === tabs.active) {
+    clearTimeout(libTimer);
     const next = tabs.list[Math.min(i, tabs.list.length - 1)];
     if (next) { tabs.active = null; saveTabs(); switchTabTo(next.id); }
-    else { const nid = newId("t"); tabs.list.push({ id: nid, name: "Pièce sans nom" }); tabs.active = nid; saveTabs(); loadDoc(emptyDoc()); save(); }
+    else { const nid = newId("t"); tabs.list.push({ id: nid, name: "Pièce sans nom", dirty: false, base: "new", baseName: "Pièce sans nom", wrote: [] }); tabs.active = nid; saveTabs(); loadDoc(emptyDoc()); save(); }
   } else saveTabs();
   renderTabs();
-  if (name && name !== "Pièce sans nom") toast(fr(`« ${name} » fermée. Elle reste dans « Mes pièces » si tu veux la rouvrir.`));
+}
+// Range la pièce d de l'onglet t dans « Mes pièces » sous le nom nm. Si elle venait de « Mes pièces » sous
+// un autre nom, l'ancienne retrouve son état d'avant (comme « Enregistrer sous »).
+function commitLib(t, d, nm) {
+  let old = null; try { old = JSON.parse(localStorage.getItem(baseKey(t.id)) || "null"); } catch { old = null; }
+  setLib((lib) => {
+    for (const w of t.wrote || []) if (w !== nm) { if (w === t.baseName && t.base === "lib") { if (old) lib[w] = old; } else delete lib[w]; }
+    lib[nm] = { ...JSON.parse(JSON.stringify(d)), name: nm, savedAt: Date.now() };
+  });
+  try { localStorage.removeItem(baseKey(t.id)); } catch { /* rien */ }
+  Object.assign(t, { name: nm, dirty: false, base: "lib", baseName: nm, wrote: [nm] });
+}
+// Ferme l'onglet. Une pièce modifiée depuis son dernier enregistrement : on demande d'abord quoi en faire.
+function closeTab(id) {
+  const t = tabs.list.find((x) => x.id === id); if (!t) return;
+  if (id === tabs.active && st.editSketch) closeSketch(true);
+  const d = tabDoc(id);
+  if (!d || isBlank(d) || !(t.dirty || t.base === undefined)) {
+    const name = d && !isBlank(d) ? d.name : "", kept = name && d.kind !== "assembly" && library()[name];
+    dropTab(id);
+    if (name) toast(kept ? `« ${name} » fermée. Tu la retrouves dans « Mes pièces ».` : `« ${name} » ${d.kind === "assembly" ? "fermé" : "fermée"}.`);
+    return;
+  }
+  askClose(t, d);
+}
+function askClose(t, d) {
+  const dlg = $("#dlg"); dlg.innerHTML = "";
+  const asm = d.kind === "assembly", legacy = t.base === undefined;
+  const name = h("input", { type: "text", id: "closeName", value: d.name || "", spellcheck: "false", autocomplete: "off" });
+  const file = h("input", { type: "checkbox", id: "closeFile" });
+  const yes = () => {
+    const nm = asm ? d.name : name.value.trim() || d.name || "Pièce sans nom";
+    if (!asm) {
+      const other = library()[nm];
+      if (other && nm !== t.baseName && !(t.wrote || []).includes(nm) && !confirm(fr(`Une autre pièce s’appelle déjà « ${nm} » dans « Mes pièces ». La remplacer ?`))) return;
+    }
+    dlg.close();
+    if (!asm) { d.name = nm; commitLib(t, d, nm); }
+    if (asm || file.checked) download(new Blob([JSON.stringify(d, null, 1)], { type: "application/json" }), `${(nm || "piece").replace(/[\\/:*?"<>|]+/g, "-").trim() || "piece"}.gabarit`);
+    dropTab(t.id);
+    toast(asm ? `« ${nm} » est enregistré dans tes téléchargements.` : file.checked ? `« ${nm} » est enregistrée dans « Mes pièces », et en fichier dans tes téléchargements.` : `« ${nm} » est enregistrée dans « Mes pièces ».`);
+  };
+  const no = () => {
+    dlg.close();
+    // on défait l'enregistrement automatique : la pièce retrouve son état d'avant, ou disparaît si elle était nouvelle
+    if (!legacy && !asm) {
+      let old = null; try { old = JSON.parse(localStorage.getItem(baseKey(t.id)) || "null"); } catch { old = null; }
+      setLib((lib) => { for (const w of t.wrote || []) { if (w === t.baseName && t.base === "lib") { if (old) lib[w] = old; } else delete lib[w]; } });
+    }
+    dropTab(t.id);
+    toast(legacy && !asm ? `« ${d.name} » fermée. Une copie faite automatiquement reste dans « Mes pièces ».` : asm ? `« ${d.name} » fermé sans l’enregistrer.` : t.base === "lib" ? `« ${d.name} » fermée sans enregistrer tes changements.` : `« ${d.name} » fermée sans l’enregistrer.`);
+  };
+  name.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); yes(); } });
+  dlg.append(h("div", { class: "dh" }, fr(`Enregistrer « ${d.name || "Pièce sans nom"} » avant de fermer ?`)),
+    h("div", { class: "db closeask" },
+      h("p", {}, asm ? "Cet assemblage a changé. Il s’enregistre dans un fichier, rangé dans tes téléchargements." : t.base === "lib" ? "Tu as modifié cette pièce depuis son dernier enregistrement." : "Cette pièce n’est pas encore enregistrée."),
+      asm ? null : h("div", { class: "field" }, h("label", { for: "closeName" }, "Nom de la pièce"), h("div", { class: "in" }, name)),
+      asm ? null : h("p", { class: "sub" }, "« Enregistrer » la range dans « Mes pièces » : tu la retrouves sur l’écran d’accueil, dans ce navigateur."),
+      asm ? null : h("label", { class: "check" }, file, h("span", {}, "Télécharger aussi un fichier .gabarit, à garder où tu veux"))),
+    h("div", { class: "df" },
+      h("button", { class: "btn primary", "data-close": "yes", onclick: yes }, "Enregistrer"),
+      h("button", { class: "btn", "data-close": "no", onclick: no }, "Ne pas enregistrer"),
+      h("button", { class: "btn", "data-close": "cancel", onclick: () => dlg.close() }, "Annuler")));
+  typoTree(dlg);
+  dlg.showModal(); if (!asm) name.select();
 }
 function switchTabTo(id) { let d = null; try { d = JSON.parse(localStorage.getItem(tabKey(id)) || "null"); } catch { d = null; } tabs.active = id; saveTabs(); loadDoc(d || emptyDoc()); save(); }
 function renderTabs() {
@@ -181,6 +289,7 @@ function renderTabs() {
   bar.innerHTML = "";
   for (const t of tabs.list) {
     bar.append(h("div", { class: "tab" + (t.id === tabs.active ? " on" : ""), title: t.name, onclick: () => switchTab(t.id), onauxclick: (e) => { if (e.button === 1) closeTab(t.id); } },
+      t.dirty ? h("span", { class: "dot", title: "Modifiée, pas encore enregistrée" }) : null,
       h("span", { class: "nm" }, t.name || "Pièce sans nom"),
       h("button", { class: "x", title: "Fermer cet onglet", "aria-label": "Fermer", onclick: (e) => { e.stopPropagation(); closeTab(t.id); } }, "✕")));
   }
@@ -218,21 +327,23 @@ let hist = [], hidx = -1;
 function pushHistory() {
   const j = JSON.stringify(doc);
   if (hist[hidx] === j) return;
+  const first = hidx < 0; // le chargement d'une pièce n'est pas une modification
   hist = hist.slice(0, hidx + 1); hist.push(j); if (hist.length > 300) hist.shift(); hidx = hist.length - 1;
+  if (!first) markDirty();
   save();
 }
 let libTimer;
 function save() {
   try { localStorage.setItem(STORE, JSON.stringify(doc)); }
   catch { if (!st.saveWarned) { st.saveWarned = true; toast("Pièce trop lourde pour l’enregistrement automatique : pense à faire « Enregistrer » (Ctrl+S)."); } }
-  if (!isAsm()) { clearTimeout(libTimer); libTimer = setTimeout(() => addToLibrary(doc), 800); }
-  const t = tabs.list.find((x) => x.id === tabs.active);
+  if (!isAsm()) { clearTimeout(libTimer); libTimer = setTimeout(autoLib, 800); }
+  const t = curTab();
   if (t && t.name !== doc.name) { t.name = doc.name; saveTabs(); renderTabs(); }
 }
 function undo() { if (hidx > 0) { hidx--; restore(); } }
 function redo() { if (hidx < hist.length - 1) { hidx++; restore(); } }
 function restore() {
-  doc = JSON.parse(hist[hidx]);
+  doc = JSON.parse(hist[hidx]); markDirty();
   if (isAsm()) { save(); asmUI.undoRefresh(); asmUI.render(); return; }
   if (st.sel && !feat(st.sel)) st.sel = null;
   if (st.editSketch && !feat(st.editSketch)) closeSketch(true);
@@ -439,14 +550,14 @@ function download(blob, name) {
 const TOOLBAR = [
   ["Esquisse", [["sketch", "Esquisse"], ["plane", "Plan"]]],
   ["Volumes", [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"], ["helix", "Ressort"], ["shapes", "Formes"]]],
-  ["Finitions", [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"], ["slice", "Coupe à plat"]]],
+  ["Finitions", [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"], ["slice", "Coupe à plat"], ["stretch", "Allonger"]]],
   ["Copies", [["mirror", "Symétrie"], ["pattern", "Répétition"], ["import", "Importer"]]],
   ["Outils", [["measure", "Mesurer"], ["section", "Coupe"], ["print", "Impression 3D"], ["drawing", "Mise en plan"]]],
 ];
 // Mode Simple : moins d'outils, des mots de tous les jours (les mêmes outils derrière).
 const TOOLBAR_SIMPLE = [
   ["Créer", [["shapes", "Formes prêtes", "hero"], ["sketch", "Dessiner"], ["import", "Importer"]]],
-  ["Volume", [["extrude", "Donner du volume"], ["cut", "Creuser"], ["revolve", "Faire tourner"], ["slice", "Couper à plat"]]],
+  ["Volume", [["extrude", "Donner du volume"], ["cut", "Creuser"], ["revolve", "Faire tourner"], ["slice", "Couper à plat"], ["stretch", "Allonger"]]],
   ["Finitions", [["hole", "Percer"], ["fillet", "Arrondir"], ["chamfer", "Biseauter"], ["shell", "Vider"]]],
   ["Copies", [["mirror", "Symétrie"], ["pattern", "Répéter"]]],
   ["Vérifier", [["measure", "Mesurer"], ["print", "Imprimer en 3D"]]],
@@ -486,6 +597,8 @@ const TOOL_TIPS = {
   drawing: "Créer le plan 2D de la pièce, à imprimer ou en PDF",
   print: "Voir les surplombs à soutenir et poser la pièce à plat automatiquement",
   slice: "Couper la pièce bien droit et enlever tout ce qui dépasse d’un côté (raccourcir, retirer un socle…)",
+  scale: "Agrandir ou réduire toute la pièce, en pourcentage ou en millimètres",
+  stretch: "Choisir une partie de la pièce entre deux traits et lui donner une autre taille, sans déformer le reste (rallonger une tige, un pied, élargir une assise…)",
 };
 // Coin de confirmation dans la vue : ✓ / ✕ toujours au même endroit.
 function renderCorner() {
@@ -579,6 +692,21 @@ function toolAction(k) {
   }
   if (k === "draft") { if (!st.mesh) return; const f = { id: newId("f"), type: "draft", name: nextName("draft"), angle: "3", faces: pre.faces.map((x) => x.p), plane: { kind: "std", name: "dessus", offset: "0" } }; insertFeature(f); startPick("faces", f.id); return; }
   if (k === "shell") { const f = { id: newId("f"), type: "shell", name: nextName("shell"), t: "2", faces: pre.faces.map((x) => x.p) }; insertFeature(f); startPick("faces", f.id); return; }
+  if (k === "scale") {
+    if (!st.mesh) { toast("Il faut d’abord une pièce : ouvre un fichier 3D ou pose une forme."); return; }
+    const live = doc.features.slice(0, st.stopAt ?? doc.features.length).filter((g) => !g.suppressed);
+    const f = live.at(-1)?.type === "scale" ? live.at(-1) : null;
+    if (f) select(f.id); else insertFeature({ id: newId("f"), type: "scale", name: nextName("scale"), k: "100" });
+    return;
+  }
+  if (k === "stretch") {
+    if (!st.mesh) { toast("Il faut d’abord une pièce : ouvre un fichier 3D ou pose une forme."); return; }
+    // on complète l'étape « Partie allongée » si c'est elle qui est choisie ou la dernière, sinon on en crée une
+    const live = doc.features.slice(0, st.stopAt ?? doc.features.length).filter((g) => !g.suppressed);
+    let f = st.sel && feat(st.sel)?.type === "stretch" ? feat(st.sel) : live.at(-1)?.type === "stretch" ? live.at(-1) : null;
+    if (f) { if (st.sel !== f.id) select(f.id); } else { f = { id: newId("f"), type: "stretch", name: nextName("stretch"), zones: [] }; insertFeature(f); }
+    pickStretch(f); return;
+  }
   if (k === "slice") {
     if (!st.mesh) { toast("Il faut d’abord une pièce à couper."); return; }
     const bb = st.mesh.bb; let axis = "z", at = (bb[0][2] + bb[1][2]) / 2;
@@ -846,9 +974,9 @@ function refreshMarkers() {
 }
 function banner(text, buttons = []) {
   const b = $("#banner");
-  if (!text) { b.hidden = true; return; }
+  if (!text) { b.hidden = true; renderGestures(); return; }
   b.innerHTML = ""; b.append(h("span", {}, text), ...buttons.map(([l, fn], i) => h("button", { class: i ? "ghost" : "", onclick: fn }, l)));
-  b.hidden = false;
+  b.hidden = false; $("#gestes")?.remove();
 }
 
 // ---------- Arbre de construction ----------
@@ -995,6 +1123,26 @@ function screwNote(f) {
 }
 
 // ---------- Panneau de réglages ----------
+// Boutons − et + d'un champ : un clic change d'un cran, rester appuyé fait défiler les chiffres
+// (de plus en plus vite). Le panneau peut être redessiné pendant qu'on reste appuyé : « live » retrouve le champ.
+let stepRun = null;
+function stopStep() { if (!stepRun) return; clearTimeout(stepRun.t1); clearInterval(stepRun.t2); const r = stepRun; stepRun = null; r.done(); }
+addEventListener("pointerup", stopStep, true); addEventListener("pointercancel", stopStep, true); addEventListener("blur", stopStep);
+function stepButtons(live, step, done) {
+  const bump = (dir, e, k = 1) => {
+    const input = live(); if (!input) return false;
+    const n = Number(String(input.value).replace(",", ".")); if (!isFinite(n) || !String(input.value).trim()) return false;
+    input.value = String(Math.round((n + (e.shiftKey ? 10 : 1) * step * dir * k) * 1000) / 1000); input.dispatchEvent(new Event("input")); return true;
+  };
+  const mk = (dir, text, title) => h("button", { type: "button", class: "stepb", tabindex: "-1", title, "aria-label": title, "data-step": dir > 0 ? "plus" : "minus",
+    onpointerdown: (e) => {
+      if (e.button !== 0) return; e.preventDefault(); stopStep();
+      if (!bump(dir, e)) { toast("Ce champ contient une formule : change-la au clavier."); return; }
+      const run = { done, n: 0 }; stepRun = run;
+      run.t1 = setTimeout(() => { run.t2 = setInterval(() => { run.n++; bump(dir, e, run.n > 60 ? 10 : run.n > 25 ? 5 : 1); }, 90); }, 400);
+    } }, text);
+  return [mk(-1, "−", "Diminuer. Reste appuyé pour faire défiler les chiffres."), mk(1, "+", "Augmenter. Reste appuyé pour faire défiler les chiffres.")];
+}
 function exprField(label, obj, key, unit = "mm", opts = {}) {
   const v = varsMap(doc.params);
   const calc = h("div", { class: "calc" });
@@ -1017,7 +1165,8 @@ function exprField(label, obj, key, unit = "mm", opts = {}) {
     }
   });
   check();
-  return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, input, unit ? h("span", { class: "unit" }, unit) : null), calc);
+  const [less, more] = stepButtons(() => (input.isConnected ? input : input.closest ? document.querySelector(`#props [data-hk="${key}"]`) : null), opts.step || 1, () => pushHistory());
+  return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, less, input, more, unit ? h("span", { class: "unit" }, unit) : null), calc);
 }
 function segField(label, obj, key, options, after) {
   return h("div", { class: "field" }, label ? h("label", {}, label) : null, h("div", { class: "seg" },
@@ -1306,6 +1455,76 @@ function drawProps() {
     if (picking) add(h("div", { class: "note ok" }, "Clique sur la pièce : la forme se pose à cet endroit."));
     add(h("h2", {}, "Rotation"), exprField("Autour de X", f, "rx", "°", { step: 15, def: "0" }), exprField("Autour de Y", f, "ry", "°", { step: 15, def: "0" }), exprField("Autour de Z", f, "rz", "°", { step: 15, def: "0" }));
   }
+  if (f.type === "scale") {
+    // le tableau de taille : un pourcentage, ou une des trois dimensions (les autres suivent)
+    const bb = st.info?.[f.id]?.bb, d0 = bb ? [0, 1, 2].map((i) => bb[1][i] - bb[0][i]) : null;
+    add(h("div", { class: "note" }, "Toute la pièce grandit ou rétrécit, en gardant ses proportions. Tape un pourcentage ou une dimension : le reste suit."));
+    const fields = {}; const kNow = () => { try { const v = evalExpr(f.k === undefined || f.k === "" ? 100 : f.k, vars); return v > 0 ? v : 100; } catch { return 100; } };
+    const sync = (skip) => { const k = kNow(); const vals = { pct: k - 100, x: d0 ? d0[0] * k / 100 : 0, y: d0 ? d0[1] * k / 100 : 0, z: d0 ? d0[2] * k / 100 : 0 }; for (const [kk, inp] of Object.entries(fields)) if (kk !== skip) { inp.value = String(Math.round(vals[kk] * 100) / 100); inp.classList.remove("bad"); } };
+    const mk = (kk, label, unit, step) => {
+      const input = h("input", { type: "text", inputmode: "decimal", spellcheck: "false", autocomplete: "off", "data-sf": kk });
+      input.addEventListener("input", () => {
+        const v = Number(input.value.replace(",", ".")), i = "xyz".indexOf(kk), k = kk === "pct" ? 100 + v : d0 && d0[i] > 1e-9 ? v / d0[i] * 100 : NaN;
+        const good = input.value.trim() !== "" && isFinite(k) && k > 0.5 && k < 100000; input.classList.toggle("bad", !good); if (!good) return;
+        mutate(() => { f.k = String(Math.round(k * 1000) / 1000); }, true); sync(kk);
+      });
+      input.addEventListener("change", () => pushHistory());
+      fields[kk] = input;
+      const [less, more] = stepButtons(() => (input.isConnected ? input : document.querySelector(`#props [data-sf="${kk}"]`)), step, () => pushHistory());
+      return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, less, input, more, h("span", { class: "unit" }, unit)));
+    };
+    add(mk("pct", "Agrandir de (négatif pour réduire)", "%", 5));
+    if (d0) add(h("h2", {}, "Ou donne une dimension"), mk("x", "Longueur (X)", "mm", 1), mk("y", "Largeur (Y)", "mm", 1), mk("z", "Hauteur (Z)", "mm", 1));
+    sync();
+    add(h("div", { class: "note" }, "Pour changer un seul sens, ou seulement une partie de la pièce (une tige, un pied, le milieu) :"),
+      h("div", { class: "btnrow" }, h("button", { class: "btn", "data-size": "stretch", onclick: () => { validateFeature(); toolAction("stretch"); } }, "Allonger une partie")));
+  }
+  if (f.type === "stretch") {
+    const zs = f.zones || [], nums = zoneNums(f), cur = Math.min(st.zoneSel ?? zs.length - 1, zs.length - 1);
+    zoneSyncFn = null;
+    add(h("div", { class: "note" }, "Choisis une partie de la pièce entre deux traits, puis donne-lui sa taille. Ce qui est avant et après garde sa forme."));
+    if (!zs.length) add(h("div", { class: "btnrow" }, h("button", { class: "btn primary", "data-zone": "pick", onclick: () => pickStretch(f) }, "Poser les deux traits sur la pièce")));
+    zs.forEach((z, i) => {
+      const n = nums[i], len = n ? n.b - n.a : 0, title = `Partie ${i + 1}, ${AX_WORD[z.axis] || AX_WORD.z}`;
+      if (i !== cur) {
+        add(h("button", { class: "zrow", "data-zone-row": i, title: "Régler cette partie", onclick: () => { st.zoneSel = i; renderProps(); renderOverlay(); } }, h("b", {}, title), h("span", {}, n ? `${nf(len, 1)} mm → ${nf(len + n.add, 1)} mm` : "à régler")));
+        return;
+      }
+      const card = h("div", { class: "zcard", "data-zone-card": i });
+      card.append(h("div", { class: "zt" }, h("b", {}, title), h("button", { class: "x", title: "Retirer cette partie", "aria-label": "Retirer cette partie", onclick: () => { mutate(() => { f.zones.splice(i, 1); }); st.zoneSel = Math.max(0, i - 1); renderProps(); renderOverlay(); } }, "✕")));
+      if (n) {
+        // trois façons de dire la même chose : la nouvelle taille, ce qu'on ajoute, ou un pourcentage
+        const fields = {};
+        const sync = (skip) => {
+          let a = 0; try { a = evalExpr(z.add || 0, vars); } catch { a = 0; }
+          const vals = { size: len + a, add: a, pct: a / len * 100 };
+          for (const [kk, inp] of Object.entries(fields)) if (kk !== skip && inp !== document.activeElement) { inp.value = String(Math.round(vals[kk] * 100) / 100); inp.classList.remove("bad"); }
+        };
+        const mk = (kk, label, unit, step) => {
+          const input = h("input", { type: "text", inputmode: "decimal", spellcheck: "false", autocomplete: "off", "data-zf": kk });
+          input.addEventListener("input", () => {
+            const v = Number(input.value.replace(",", ".")), a = kk === "size" ? v - len : kk === "pct" ? len * v / 100 : v;
+            const good = input.value.trim() !== "" && isFinite(v) && a > -len + 0.01; input.classList.toggle("bad", !good); if (!good) return;
+            mutate(() => { z.add = String(Math.round(a * 1000) / 1000); }, true); sync(kk); renderOverlay();
+          });
+          input.addEventListener("change", () => pushHistory());
+          fields[kk] = input;
+          const [less, more] = stepButtons(() => (input.isConnected ? input : document.querySelector(`#props [data-zf="${kk}"]`)), step, () => pushHistory());
+          return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, less, input, more, h("span", { class: "unit" }, unit)));
+        };
+        card.append(mk("size", `Nouvelle taille de cette partie (au départ ${nf(len, 1)} mm)`, "mm", 1), mk("add", "Soit, en plus (négatif pour raccourcir)", "mm", 1), mk("pct", "Ou en pourcentage", "%", 5));
+        sync(); zoneSyncFn = () => sync();
+        card.append(h("div", { class: "zpos" }, `Entre ${nf(n.a, 1)} et ${nf(n.b, 1)} mm, ${AX_WORD[z.axis] || AX_WORD.z}.`));
+      } else card.append(h("div", { class: "note warn" }, "Cette partie est mal réglée : repose ses deux traits."));
+      card.append(h("div", { class: "btnrow" }, h("button", { class: "btn", "data-zone": "again", onclick: () => pickStretch(f, i) }, "Reposer les deux traits")));
+      add(card);
+    });
+    if (zs.length) {
+      add(h("div", { class: "btnrow" }, h("button", { class: "btn primary", "data-zone": "more", onclick: () => pickStretch(f) }, "+ Allonger une autre partie")));
+      add(h("div", { class: "note" }, "Dans la vue, tire la flèche orange pour allonger ou raccourcir : aucune touche à tenir, et Maj pour un réglage plus fin."));
+      add(h("div", { class: "note" }, "À faire plutôt vers la fin : après cette étape la pièce devient un maillage fin, les arrondis et les perçages y marchent moins bien."));
+    }
+  }
   if (f.type === "slice") {
     const ax = f.axis || "z";
     add(h("div", { class: "field" }, h("label", {}, "Sens de la coupe"), h("div", { class: "seg" },
@@ -1350,14 +1569,11 @@ h("span", { class: "unit pct" }, `${Math.round(k(key) * sc * 100)} %`))));
       if (["sx", "sy", "sz"].some((a) => k(a) !== 1) || sc !== 1) add(h("div", { class: "btnrow" }, h("button", { class: "btn", onclick: () => { mutate(() => { delete f.sx; delete f.sy; delete f.sz; f.scale = "1"; }); renderProps(); } }, "Taille d’origine")));
     } else add(exprField("Échelle", f, "scale", "×", { step: 0.1 }));
     if (f.format === "stl") {
-      add(h("h2", {}, "Allonger une zone"));
+      add(h("h2", {}, "Allonger une partie"));
       const ibb = st.info?.[f.id]?.bb;
       if (!f.zone) {
-        add(h("div", { class: "note" }, "Pour allonger le milieu sans déformer les bouts (trous, clips, pas de vis)."));
-        add(h("div", { class: "btnrow" }, h("button", { class: "btn", "data-zone": "add", onclick: () => {
-          const d = ibb ? [0, 1, 2].map((k) => ibb[1][k] - ibb[0][k]) : [30, 20, 10]; const k = d.indexOf(Math.max(...d));
-          mutate(() => { f.zone = { axis: "xyz"[k], a: r2(d[k] * 0.4), b: r2(d[k] * 0.6), add: "0" }; }); renderProps(); renderOverlay();
-        } }, "Allonger seulement une zone")));
+        add(h("div", { class: "note" }, "Pour rallonger une tige, un pied ou le milieu d’un objet sans déformer le reste : choisis la partie entre deux traits, puis donne-lui sa taille."));
+        add(h("div", { class: "btnrow" }, h("button", { class: "btn primary", "data-zone": "tool", onclick: () => toolAction("stretch") }, "Allonger une partie")));
       } else {
         const z = f.zone; const edge = { x: "du bord gauche", y: "du bord avant", z: "du bas" }[z.axis] || "du bord";
         add(h("div", { class: "field" }, h("label", {}, "Dans quel sens"), h("div", { class: "seg" },
@@ -1383,6 +1599,40 @@ h("span", { class: "unit pct" }, `${Math.round(k(key) * sc * 100)} %`))));
     h("button", { class: "btn ghost", title: "Met l’étape en pause sans la supprimer (pour comparer avec et sans)", onclick: () => mutate(() => { f.suppressed = !f.suppressed; }) || renderProps() }, f.suppressed ? "Réactiver" : "Mettre en pause")));
   void vars;
   if (isSimple()) plainify(P);
+}
+
+// ---------- Parties allongées ----------
+const AX_WORD = { x: "en longueur (X)", y: "en largeur (Y)", z: "en hauteur (Z)" };
+let zoneSyncFn = null; // remet à jour les trois champs de la partie réglée (pendant qu'on tire la flèche)
+// Les zones de l'étape en chiffres : { k, a, b, add }, ou null pour une zone incomplète.
+function zoneNums(f) {
+  const vars = varsMap(doc.params);
+  return (f.zones || []).map((z) => {
+    try { const a = evalExpr(z.a ?? 0, vars), b = evalExpr(z.b ?? 0, vars), add = evalExpr(z.add || 0, vars), k = "xyz".indexOf(z.axis); return [a, b, add].every(isFinite) && b > a + 0.01 && add > -(b - a) ? { k: k < 0 ? 2 : k, a, b, add } : null; } catch { return null; }
+  });
+}
+// Deux clics sur la pièce posent les deux traits. Le sens est celui où les deux clics sont le plus éloignés.
+function pickStretch(f, zi) {
+  if (st.pick) stopPick(false);
+  const pts = [];
+  banner("1 sur 2 : clique sur la pièce, là où commence la partie à allonger.");
+  viewer.setPick({ kind: "face", onPick: (hit) => {
+    if (!feat(f.id)) { viewer.setPick(null); banner(null); return; }
+    pts.push(hit.point);
+    if (pts.length === 1) { banner("2 sur 2 : clique maintenant là où elle finit. Seul ce qui est entre tes deux clics changera de taille."); viewer.setMarkers([hit.point], 0x2f6fb5); return; }
+    viewer.setPick(null); banner(null); refreshMarkers();
+    const d = [0, 1, 2].map((i) => Math.abs(pts[1][i] - pts[0][i])), k = d.indexOf(Math.max(...d));
+    if (d[k] < 0.05) { toast("Les deux clics sont au même endroit : recommence en cliquant plus loin."); return; }
+    // la pièce affichée est déjà allongée : on revient aux positions d'avant
+    const un = zoneUnmap(zoneNums(f).filter(Boolean), k);
+    const a = un(Math.min(pts[0][k], pts[1][k])), b = un(Math.max(pts[0][k], pts[1][k]));
+    mutate(() => {
+      if (zi !== undefined && f.zones?.[zi]) { const z = f.zones[zi]; Object.assign(z, { axis: "xyz"[k], a: r2(a), b: r2(b) }); if (!((Number(z.add) || 0) > -(b - a) + 0.01)) z.add = "0"; st.zoneSel = zi; }
+      else { f.zones = [...(f.zones || []), { axis: "xyz"[k], a: r2(a), b: r2(b), add: "0" }]; st.zoneSel = f.zones.length - 1; }
+    });
+    renderProps(); renderOverlay();
+    toast("Partie choisie. Tire la flèche orange, ou tape sa nouvelle taille à gauche.");
+  } });
 }
 
 // Zone à allonger : deux clics sur la pièce donnent son début et sa fin.
@@ -1522,7 +1772,7 @@ const SK_HINTS = {
   rectc: "Clique au centre, puis à un coin.",
   rect3: "Clique les deux bouts d’un côté, puis un troisième point pour la largeur.",
   circle3: "Clique trois points par lesquels le cercle doit passer.",
-  select: "Clique sur une forme pour la choisir, puis Ctrl+clic sur une autre pour voir les contraintes possibles. Clic dans le vide ou Échap : tout désélectionner. Clic droit maintenu : déplacer la vue.",
+  select: "Tire une forme pour la déplacer, tire un de ses points pour la déformer : aucune touche à tenir. Clique sur une forme pour régler ses cotes à gauche ; Ctrl+clic sur une autre pour voir les contraintes possibles. Échap : tout désélectionner. Clic droit maintenu : déplacer la vue, molette : zoomer.",
   rect: "Glisse d’un coin à l’autre (ou clique deux fois). Maj : sans accroche.",
   circle: "Clique au centre, puis au bord. Les centres des trous de la pièce (petites croix) servent d’accroche.",
   slot: "Clique au premier centre, puis au second. Règle la largeur à droite.",
@@ -1797,6 +2047,13 @@ function refreshHandles() {
       } else if (f.type === "slice" && st.info?.[f.id]?.bb && plain(f.at)) {
         const bb = st.info[f.id].bb; const k = { x: 0, y: 1, z: 2 }[f.axis] ?? 2; const o = [0, 1, 2].map((i) => (bb[0][i] + bb[1][i]) / 2); o[k] = val(f.at);
         handleList.push({ id: "at", origin: o, dir: AXV[k], color: HCOL[k], obj: f, key: "at", base: val(f.at), label: "Coupe" });
+      } else if (f.type === "stretch" && st.mesh?.bb) {
+        // la flèche part du deuxième trait de la partie réglée : la tirer allonge ou raccourcit
+        const nums = zoneNums(f), zi = Math.min(st.zoneSel ?? nums.length - 1, nums.length - 1), n = nums[zi], z = f.zones?.[zi];
+        if (n && plain(z.add)) {
+          const bb = st.mesh.bb; const o = [0, 1, 2].map((i) => (bb[0][i] + bb[1][i]) / 2); o[n.k] = zoneMap(nums.filter(Boolean), n.k)(n.b);
+          handleList.push({ id: "add", origin: o, dir: AXV[n.k], color: 0xc4552b, obj: z, key: "add", base: n.add, min: Math.ceil((-(n.b - n.a) + 0.2) * 10) / 10, label: "Partie allongée de", after: () => { renderPlanes(); zoneSyncFn?.(); } });
+        }
       } else if (f.type === "extrude" && f.end !== "face" && !f.through && plain(f.dist)) {
         // épaisseur : la flèche part du bout de la matière, au centre du dessin
         const sk = feat(f.sketch); const pl = resolvePlane(sk.plane, vars); const dist = val(f.dist);
@@ -1811,6 +2068,36 @@ function refreshHandles() {
     } catch { handleList = []; }
   }
   viewer.setHandles(handleList.map(({ id, origin, dir, color, ring, u }) => ({ id, origin, dir, color, ring, u })), onHandleDrag);
+  $("#handTip")?.remove(); renderGestures();
+}
+// Ce que fait une poignée quand on la tire (dit au survol, et dans l'aide des gestes).
+const handleUse = (hd) => (hd.ring ? "tourner" : hd.key === "dist" ? (hd.label === "Profondeur" ? "changer la profondeur" : "changer l’épaisseur") : hd.key === "at" ? "déplacer la coupe" : hd.key === "add" ? "allonger ou raccourcir cette partie" : "déplacer");
+function handleHover(id, e) {
+  const hd = id ? handleList.find((x) => x.id === id) : null;
+  if (!hd) { $("#handTip")?.remove(); return; }
+  const tip = $("#handTip") || document.body.appendChild(h("div", { id: "handTip", class: "dragtip" }));
+  tip.textContent = fr(`Tire pour ${handleUse(hd)}. Aucune touche à tenir.`); tip.style.left = e.clientX + 16 + "px"; tip.style.top = e.clientY + 16 + "px";
+}
+// ---------- Aide des gestes : ce qu'on peut faire maintenant avec la souris, toujours écrit en bas de la vue ----------
+function renderGestures() {
+  $("#gestes")?.remove();
+  if (isAsm() || st.editSketch || !$("#welcome")?.hidden || extras?.isPrintOpen() || $(".secbar")) return;
+  if (viewer.pickMode || st.pick) return; // le bandeau du haut dit déjà où cliquer
+  let items = [];
+  const has = (fn) => handleList.some(fn);
+  if (has((x) => !x.ring && !["dist", "at", "add"].includes(x.key))) items.push(["pull", "Tire une flèche : déplacer"]);
+  if (has((x) => x.ring)) items.push(["turn", "Tire un arc : tourner"]);
+  for (const x of handleList) if (["dist", "at", "add"].includes(x.key)) items.push(["pull", `Tire la flèche${x.key === "at" ? "" : " orange"} : ${handleUse(x)}`]);
+  if (items.length) items.push(["keycap", "Aucune touche à tenir. Avec Maj : réglage fin"], ["digits", has((x) => x.ring) ? "Pour agrandir : les chiffres de « Taille » à gauche, ou leurs boutons − et +" : "Ou change les chiffres à gauche, avec leurs boutons − et +"]);
+  else if (st.mesh) items = [["mouseL", "Clic sur une étape à gauche, ou double-clic sur la pièce : changer une taille"], ["mouseL", "Clic gauche maintenu : tourner la vue"], ["mouseR", "Clic droit maintenu : déplacer la vue"], ["wheel", "Molette : zoomer"]];
+  else return;
+  if (pref("gabarit-gestes") === "0") {
+    $(".stage").append(h("button", { id: "gestes", class: "gestes mini", title: "Afficher l’aide des gestes", onclick: () => { setPref("gabarit-gestes", "1"); renderGestures(); } }, h("i", { html: ICONS.mouseL }), "Gestes"));
+    return;
+  }
+  const bar = h("div", { id: "gestes", class: "gestes" }, items.map(([ic, text]) => h("span", { class: "g" }, h("i", { html: ICONS[ic] }), text)),
+    h("button", { class: "x", title: "Masquer cette aide (un bouton « Gestes » reste pour la retrouver)", "aria-label": "Masquer l’aide des gestes", onclick: () => { setPref("gabarit-gestes", "0"); renderGestures(); } }, "✕"));
+  typoTree(bar); $(".stage").append(bar);
 }
 function onHandleDrag(id, delta, phase, e) {
   const hd = handleList.find((x) => x.id === id); if (!hd) return 0;
@@ -1828,6 +2115,7 @@ function onHandleDrag(id, delta, phase, e) {
     const inp = $(`#props [data-hk="${hd.key}"]`); if (inp) inp.value = String(shown);
     const mk = $(`#dimCard [data-mk="${hd.key}"]`); if (mk) mk.value = String(shown);
     if (hd.obj.type === "slice") renderPlanes();
+    hd.after?.();
   }
   tip.textContent = deg ? `${hd.label} : ${nf(shown, 0)}°` : `${hd.label} : ${nf(v, 2)} mm`; tip.style.left = e.clientX + 16 + "px"; tip.style.top = e.clientY + 14 + "px";
   return (v - hd.base) / k;
@@ -1869,6 +2157,13 @@ function renderPlanes() {
   };
   try {
     if (sf && bb && sf.type === "slice" && !sf.suppressed) cutPlane({ x: 0, y: 1, z: 2 }[sf.axis] ?? 2, evalExpr(sf.at ?? 0, vars));
+    if (sf && sf.type === "stretch" && !sf.suppressed && st.mesh?.bb) {
+      const nums = zoneNums(sf), all = nums.filter(Boolean), mb = st.mesh.bb, cur = Math.min(st.zoneSel ?? nums.length - 1, nums.length - 1);
+      nums.forEach((n, i) => {
+        if (!n) return; const g = zoneMap(all, n.k), u = (n.k + 1) % 3, w = (n.k + 2) % 3, mg = Math.max(mb[1][u] - mb[0][u], mb[1][w] - mb[0][w]) * 0.16 + 3;
+        for (const at of [g(n.a), g(n.b)]) { const o = [0, 0, 0]; o[n.k] = at; o[u] = (mb[0][u] + mb[1][u]) / 2; o[w] = (mb[0][w] + mb[1][w]) / 2; list.push({ origin: o, x: AXV[u], y: AXV[w], w: (mb[1][u] - mb[0][u]) + mg, h: (mb[1][w] - mb[0][w]) + mg, active: i === cur }); }
+      });
+    }
     if (sf && bb && sf.type === "import" && sf.zone && !sf.suppressed) {
       const k = { x: 0, y: 1, z: 2 }[sf.zone.axis] ?? 0; const a = evalExpr(sf.zone.a ?? 0, vars), b = evalExpr(sf.zone.b ?? 0, vars), ad = evalExpr(sf.zone.add || 0, vars);
       cutPlane(k, bb[0][k] + a); cutPlane(k, bb[0][k] + b + ad);
@@ -2101,7 +2396,7 @@ function showBusy(on, text = "Calcul…") { const b = $("#busy"); b.hidden = !on
 function layoutMode() {
   const M = document.querySelector("main");
   M.classList.toggle("asm", isAsm()); M.classList.toggle("editing", !isAsm() && !!(st.editSketch || feat(st.sel)));
-  renderCorner(); renderCoach();
+  renderCorner(); renderCoach(); renderGestures();
 }
 // Coup de pouce du mode Simple : propose la suite, sans jamais bloquer.
 const defisDone = () => { try { return JSON.parse(pref("gabarit-defis") || "[]"); } catch { return []; } };
@@ -2148,7 +2443,7 @@ function renderAll() { layoutMode(); if (isAsm()) { $("#docName").value = doc.na
 
 // Accueil au lancement : continuer, nouveau, ouvrir, ou gérer ses pièces récentes.
 function welcome(show) {
-  const w = $("#welcome"); if (!show) { w.hidden = true; renderCoach(); return; }
+  const w = $("#welcome"); if (!show) { w.hidden = true; renderCoach(); renderGestures(); return; }
   const draw = () => {
     w.innerHTML = "";
     const lib = library();
@@ -2211,9 +2506,13 @@ function help() {
     <h3>Deux modes</h3><p>En haut à droite, choisis <b>Simple</b> (l’essentiel, des formes prêtes, des mots de tous les jours) ou <b>Expert</b> (tous les outils). Tu peux passer de l’un à l’autre à tout moment, ta pièce ne change pas. Le bouton lune ou soleil change le thème.</p>
     <h3>Formes prêtes</h3><p><b>Formes prêtes</b> pose une boîte, un cylindre, une sphère, un engrenage, un texte… Clique ensuite sur la pièce pour la placer, règle sa taille à gauche, et choisis <b>Ajouter de la matière</b> ou <b>Creuser</b>.</p>
     <h3>Tout à la souris</h3><p>Quand tu choisis une forme prête, un fichier importé, une extrusion ou une coupe, des <b>flèches</b> apparaissent sur la pièce : tire-les pour déplacer ou pour régler l’épaisseur. La valeur avance au millimètre ; garde <b>Maj</b> enfoncée pour le dixième. Les <b>arcs</b> de couleur font tourner une forme prête ou un fichier importé, par crans de 5° (au degré près avec Maj). Tu peux toujours taper la valeur exacte à gauche.</p>
+    <h3>Aucune touche à tenir</h3><p>Tout se fait à la souris, sans touche enfoncée : tire une flèche pour déplacer ou épaissir, tire un arc pour tourner. En bas de la vue, une ligne rappelle à chaque instant <b>ce que fait chaque geste</b>. Chaque chiffre a ses boutons <b>−</b> et <b>+</b> : un clic avance d’un cran, rester appuyé fait défiler.</p>
+    <h3>Changer la taille</h3><p>Le bouton <b>Taille</b>, à droite de la vue, agrandit ou réduit toute la pièce : tape « 30 » pour 30 % de plus, ou donne une dimension en millimètres et le reste suit.</p>
+    <h3>Allonger une partie</h3><p>Pour changer seulement un morceau (le milieu d’une chaise pour en faire un banc, la tige d’une lampe), choisis <b>Allonger</b>, pose <b>deux traits</b> sur la pièce en cliquant deux fois, puis donne la taille de la partie comprise entre les deux, en millimètres ou en pourcentage, ou tire la flèche orange. Le reste de la pièce ne change pas. Tu peux allonger plusieurs parties, en hauteur, en largeur ou en longueur. Après cette étape, les formes rondes deviennent de petites facettes très fines : fais plutôt les arrondis et les trous avant.</p>
+    <h3>Onglets</h3><p>Chaque pièce ouverte a son onglet. Un <b>point</b> sur l’onglet signale une pièce modifiée. Quand tu fermes l’onglet, Gabarit te demande si tu veux l’<b>enregistrer</b> : Enregistrer, Ne pas enregistrer ou Annuler.</p>
     <h3>Changer une cote sur la pièce</h3><p><b>Double-clique</b> sur une face : l’étape qui l’a faite s’ouvre, et ses cotes s’affichent à côté de la souris. Tape la nouvelle valeur, puis Entrée. Échap annule.</p>
     <h3>Importer un dessin</h3><p>Ouvre un fichier <b>SVG</b> ou <b>DXF</b> (un logo, un plan) : il devient une esquisse à la largeur que tu choisis, tout de suite épaissie de 3 mm. Les textes d’un SVG doivent d’abord être convertis en tracés dans ton logiciel de dessin.</p>
-    <h3>Fichiers d’impression 3D</h3><p>Ouvre un STL ou un 3MF, puis clique sur son étape. <b>Taille</b> l’étire dans un seul sens. <b>Allonger seulement une zone</b> étire le milieu entre deux plans sans déformer les bouts (trous, clips, pas de vis). <b>Coupe à plat</b> enlève tout ce qui dépasse d’un côté d’un plan : pratique pour raccourcir ou retirer un socle.</p>
+    <h3>Fichiers d’impression 3D</h3><p>Ouvre un STL ou un 3MF, puis clique sur son étape. <b>Taille</b> l’étire dans un seul sens. <b>Allonger une partie</b> étire un morceau entre deux traits sans déformer le reste (trous, clips, pas de vis). <b>Coupe à plat</b> enlève tout ce qui dépasse d’un côté d’un plan : pratique pour raccourcir ou retirer un socle.</p>
     <h3>Modèles de départ</h3><p>Sur l’écran d’accueil, quatre objets tout faits (porte-clés, boîte, crochet, support de téléphone) : ouvre-en un, clique sur ses étapes à gauche et change les tailles ou le texte. Juste en dessous, trois <b>mini-défis</b> te guident pas à pas pour fabriquer ton premier objet.</p>
     <h3>1. L’esquisse</h3><p>Clique sur <b>Esquisse</b>, choisis un plan (ou une face de la pièce), puis dessine des rectangles, cercles, rainures, polygones ou un contour libre. Tape les cotes exactes à droite. Une forme placée dans une autre devient un trou.</p>
     <h3>Traits, zones et retouches</h3><p>Plusieurs traits qui se rejoignent forment un contour : la zone fermée <b>se colore</b>, et un <b>rond orange</b> signale un bout de trait qui ne touche rien. Près d’un trait ou d’un cercle, le point que tu poses s’accroche dessus. Un trait qui traverse une forme la coupe en deux : à l’extrusion, clique les zones à garder. <b>Ajuster</b> retire le morceau de trait survolé, entre deux croisements. <b>Congé</b> arrondit le coin cliqué ; son rayon reste modifiable dans la liste des points.</p>
@@ -2235,7 +2534,10 @@ function help() {
 }
 function saveFile() {
   const blob = new Blob([JSON.stringify(doc, null, 1)], { type: "application/json" });
-  download(blob, `${safeName()}.gabarit`); toast("Pièce enregistrée dans tes téléchargements.");
+  download(blob, `${safeName()}.gabarit`);
+  const t = curTab();
+  if (t && !isAsm() && !isBlank(doc)) { clearTimeout(libTimer); commitLib(t, doc, doc.name || "Pièce sans nom"); saveTabs(); renderTabs(); toast("Pièce enregistrée : un fichier dans tes téléchargements, et une copie dans « Mes pièces »."); }
+  else { if (t && isAsm()) { t.dirty = false; saveTabs(); renderTabs(); } toast(isAsm() ? "Assemblage enregistré dans tes téléchargements." : "Pièce enregistrée dans tes téléchargements."); }
 }
 async function openFile(file) {
   if (DRAW_EXT.test(file.name)) { importDrawing(file); return; }
@@ -2257,6 +2559,7 @@ async function openFile(file) {
 
 // ---------- Démarrage ----------
 const viewer = new Viewer($("#view"));
+viewer.onHandleHover = handleHover;
 // Présélection (sans outil) : clic sur une arête ou une face, Maj pour en ajouter.
 // Puis une barre d'actions propose la suite (esquisser, congé, chanfrein, coque…).
 st.pre = { edges: [], faces: [] };
@@ -2420,7 +2723,7 @@ const asmUI = createAssemblyUI({
 });
 const extras = createExtras({
   h, $, fr, nf, toast, viewer, st, markTool,
-  getDoc: () => doc, loadDoc: (d) => { welcome(false); openTab(d); }, replaceDoc: (d) => { welcome(false); loadDoc(d); }, mutate, renderParams, renderProps,
+  getDoc: () => doc, loadDoc: (d) => { welcome(false); openTab(d); }, replaceDoc: (d) => { welcome(false); loadDoc(d); markDirty(); save(); }, mutate, renderParams, renderProps,
   setPrintDown: (g) => { if (g) doc.printDown = g; else delete doc.printDown; pushHistory(); },
   commands: () => commandList(), publish: () => publishPack(),
 });
@@ -2431,6 +2734,8 @@ const KEYS = {
   mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
   draft: "demoulage incliner", import: "step stl ouvrir modele svg dxf logo dessin", measure: "distance cote longueur", section: "couper interieur",
   print: "impression imprimante 3d support surplomb orientation trancheur", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
+  scale: "taille agrandir reduire echelle pourcentage plus grand plus petit dimension",
+  stretch: "etirer agrandir rallonger allonger raccourcir section zone partie banc tige pied",
   shapes: "forme prete primitive boite cube cylindre sphere boule cone tube anneau tore etoile coeur engrenage texte",
 };
 function commandList() {
@@ -2535,6 +2840,7 @@ sketcher = new Sketcher($("#skSvg"), {
 renderTools();
 $("#views").append(
   h("div", { class: "row" }, h("button", { title: "Tout voir (F)", onclick: () => viewer.fit() }, "Recadrer"), h("button", { title: "Vue isométrique (Ctrl 7)", onclick: () => viewer.fit([1, -1.3, 0.9]) }, "3D")),
+  h("div", { class: "row" }, h("button", { class: "wide", id: "sizeBtn", title: "Agrandir ou réduire toute la pièce, en % ou en mm", onclick: () => toolAction("scale") }, h("i", { html: ICONS.scale }), "Taille")),
 );
 viewer.mountCube($("#views"), (dir) => viewer.fit(dir));
 document.querySelector(".file").addEventListener("click", (e) => {
@@ -2557,7 +2863,10 @@ document.querySelector(".file").addEventListener("click", (e) => {
   if (a === "install") installApp();
 });
 $(".params-box").addEventListener("click", (e) => { if (e.target.closest("[data-act=addParam]")) addParam(); });
-$("#docName").addEventListener("change", (e) => { if (isAsm()) { doc.name = e.target.value.trim() || "Assemblage sans nom"; pushHistory(); return; } mutate(() => { doc.name = e.target.value.trim() || "Pièce sans nom"; }); });
+$("#docName").addEventListener("change", (e) => { if (isAsm()) { doc.name = e.target.value.trim() || "Assemblage sans nom"; pushHistory(); return; } const want = e.target.value.trim() || "Pièce sans nom", t = curTab();
+  const nm = want === doc.name || isBlank(doc) || (t?.wrote || []).includes(want) ? want : freeName(want, null, t?.id);
+  if (nm !== want) { e.target.value = nm; toast(`Une autre pièce s’appelle déjà « ${want} » : celle-ci s’appelle « ${nm} ».`); }
+  mutate(() => { doc.name = nm; }); });
 $("#fileIn").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) openFile(f); e.target.value = ""; });
 document.addEventListener("dragover", (e) => e.preventDefault());
 document.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) openFile(f); });
@@ -2635,7 +2944,19 @@ const hasSaved = saved && (saved.kind === "assembly" || (Array.isArray(saved.fea
 if (hasSaved) loadDoc(saved); else loadDoc(emptyDoc());
 // onglets : le document actif est celui enregistré en dernier
 tabs.list = tabs.list.filter((t) => t && t.id);
-if (!tabs.list.some((t) => t.id === tabs.active)) { const id = newId("t"); tabs.list.push({ id, name: doc.name }); tabs.active = id; saveTabs(); }
+if (!tabs.list.some((t) => t.id === tabs.active)) { const id = newId("t"); tabs.list.push({ id, name: doc.name }); tabs.active = id; }
+// onglets d'avant la v1.4 : une pièce déjà rangée telle quelle dans « Mes pièces » est « enregistrée », les autres non
+{
+  const lib = library();
+  for (const t of tabs.list) {
+    if (t.base !== undefined) continue;
+    const d = tabDoc(t.id), n = d?.name || t.name || "Pièce sans nom";
+    if (!d || isBlank(d)) Object.assign(t, { dirty: false, base: "new", baseName: n, wrote: [] });
+    else if (d.kind === "assembly") Object.assign(t, { dirty: !!(d.components || []).length, base: "new", baseName: n, wrote: [] });
+    else { const same = !!lib[n] && sameDoc(lib[n], d); Object.assign(t, { dirty: !same, base: same ? "lib" : "new", baseName: n, wrote: same ? [n] : [] }); }
+  }
+  saveTabs();
+}
 renderTabs();
 applyMode(); applyTheme();
 if (!location.hash.startsWith("#p=")) welcome(true);
@@ -2643,5 +2964,5 @@ typoTree(document.body);
 startWorker();
 extras.openFromHash();
 window.addEventListener("hashchange", () => extras.openFromHash());
-window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, openSketch, exampleDoc, emptyAsm, library, addToLibrary, asmUI, showWelcome: () => welcome(true), rebuild: () => requestBuild(0), get history() { return { n: hist.length, i: hidx }; } };
+window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, openSketch, exampleDoc, emptyAsm, library, addToLibrary, asmUI, openTab, closeTab, mutate, insertFeature, select, showWelcome: () => welcome(true), rebuild: () => requestBuild(0), get history() { return { n: hist.length, i: hidx }; } };
 if ("launchQueue" in window) window.launchQueue.setConsumer(async (p) => { for (const fh of p.files || []) openFile(await fh.getFile()); });
