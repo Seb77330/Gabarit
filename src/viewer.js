@@ -170,16 +170,23 @@ export class Viewer {
     geo.setIndex(new THREE.BufferAttribute(this.data.triangles.slice(g.start, g.start + g.count), 1));
     return geo;
   }
-  fit(dir, box) {
+  // « lift » : part de la hauteur de la vue cachée en bas par un panneau (la pièce est remontée d'autant).
+  fit(dir, box, lift = 0) {
     const pb = this.printDown && this.mesh ? new THREE.Box3().setFromObject(this.part) : null;
     const bb = box ? box : pb ? [pb.min.toArray(), pb.max.toArray()] : this.data ? this.data.bb : this.asmBox ? [this.asmBox.min.toArray(), this.asmBox.max.toArray()] : [[-50, -50, 0], [50, 50, 50]];
     const c = new THREE.Vector3((bb[0][0] + bb[1][0]) / 2, (bb[0][1] + bb[1][1]) / 2, (bb[0][2] + bb[1][2]) / 2);
     const r = Math.max(10, Math.hypot(bb[1][0] - bb[0][0], bb[1][1] - bb[0][1], bb[1][2] - bb[0][2]) / 2);
     const v = dir ? new THREE.Vector3(...dir).normalize() : this.camera.position.clone().sub(this.controls.target).normalize();
-    const dist = r / Math.sin((this.camera.fov * Math.PI / 180) / 2) * 1.15;
+    lift = Math.max(0, Math.min(0.45, lift || 0));
+    const dist = r / Math.sin((this.camera.fov * Math.PI / 180) / 2) * 1.15 / (1 - lift);
     this.controls.target.copy(c);
-    this.camera.position.copy(c.clone().add(v.multiplyScalar(dist)));
+    this.camera.position.copy(c.clone().add(v.clone().multiplyScalar(dist)));
     if (dir && Math.abs(dir[2]) > 0.99) this.camera.up.set(0, dir[2] > 0 ? 1 : -1, 0); else this.camera.up.set(0, 0, 1);
+    if (lift) {
+      const right = new THREE.Vector3().crossVectors(this.camera.up, v).normalize(); const up = new THREE.Vector3().crossVectors(v, right).normalize();
+      const shift = up.multiplyScalar(-lift * dist * Math.tan((this.camera.fov * Math.PI / 180) / 2));
+      this.controls.target.add(shift); this.camera.position.add(shift);
+    }
     this.camera.near = dist / 100; this.camera.far = dist * 100; this.camera.updateProjectionMatrix();
     this.controls.update();
   }
@@ -535,12 +542,13 @@ export class Viewer {
     g.children.forEach((c) => (c.renderOrder = 12)); g.position.set(...p); this.cogObj = g; this.scene.add(g);
   }
   // ---------- Impression 3D : surplombs en couleur, pièce posée sur sa face d'appui ----------
-  setPrintView(g) {
+  // « cls » : classe par triangle donnée par le contrôle d'impression (1 paroi fine, 2 pont court, 3 pont trop long).
+  setPrintView(g, cls) {
     const geo = this.geo; const data = this.data;
     if (!g || !geo || !data) {
       if (geo?.getAttribute("color")) geo.deleteAttribute("color");
       this.mat.vertexColors = false; this.mat.color.set(0xc3ccd7); this.mat.needsUpdate = true;
-      this.part.quaternion.identity(); this.printDown = null; this.updateGround(); return;
+      this.part.quaternion.identity(); this.printDown = null; this.setPlate(null); this.updateGround(); return;
     }
     const V = data.vertices, N = data.normals, n = V.length / 3;
     let maxD = -Infinity; for (let i = 0; i < n; i++) maxD = Math.max(maxD, V[i * 3] * g[0] + V[i * 3 + 1] * g[1] + V[i * 3 + 2] * g[2]);
@@ -555,10 +563,34 @@ export class Viewer {
       else if (c > 0.5) rgb = [0.93, 0.6, 0.25]; // limite
       col.set(rgb, i * 3);
     }
+    if (cls) {
+      const T = data.triangles; const paint = (k, rgb) => { for (let t = 0; t < cls.length; t++) if (cls[t] === k) for (let j = 0; j < 3; j++) col.set(rgb, T[t * 3 + j] * 3); };
+      paint(3, [0.86, 0.25, 0.22]); paint(2, [0.27, 0.55, 0.87]); paint(1, [0.62, 0.36, 0.86]);
+    }
     geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
     this.mat.vertexColors = true; this.mat.color.set(0xffffff); this.mat.needsUpdate = true;
     this.part.quaternion.setFromUnitVectors(new THREE.Vector3(...g), new THREE.Vector3(0, 0, -1));
     this.printDown = g; this.updateGround();
+  }
+  // Les deux axes horizontaux de la vue d'impression, exprimés dans le repère de la pièce.
+  printFrame(g) {
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(...g), new THREE.Vector3(0, 0, -1)).invert();
+    return { u: new THREE.Vector3(1, 0, 0).applyQuaternion(q).toArray(), w: new THREE.Vector3(0, 1, 0).applyQuaternion(q).toArray() };
+  }
+  // Contour du plateau de l'imprimante sous la pièce : { size: [X, Y], center, z, turn (°), swap, ok } ou null.
+  setPlate(pl) {
+    if (this.plate) { this.scene.remove(this.plate); this.plate.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); }); this.plate = null; }
+    if (!pl) return;
+    const hx = (pl.swap ? pl.size[1] : pl.size[0]) / 2, hy = (pl.swap ? pl.size[0] : pl.size[1]) / 2;
+    const color = pl.ok ? 0xc4552b : 0xdb403a;
+    const g = new THREE.Group();
+    const ring = new THREE.BufferGeometry().setFromPoints([[-hx, -hy], [hx, -hy], [hx, hy], [-hx, hy]].map((p) => new THREE.Vector3(p[0], p[1], 0)));
+    g.add(new THREE.LineLoop(ring, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95 })));
+    const fill = new THREE.Mesh(new THREE.PlaneGeometry(hx * 2, hy * 2), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: pl.ok ? 0.06 : 0.1, depthWrite: false, side: THREE.DoubleSide }));
+    g.add(fill);
+    g.position.set(pl.center[0], pl.center[1], pl.z - Math.max(0.02, this.size * 0.001));
+    g.rotation.z = (pl.turn || 0) * Math.PI / 180;
+    g.renderOrder = 1; this.plate = g; this.scene.add(g);
   }
   // ---------- Assemblage : un groupe par composant ----------
   setAssembly(list) {

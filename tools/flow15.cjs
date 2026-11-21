@@ -1,5 +1,6 @@
 // v0.9.2 : centres des trous, rectangle depuis le centre / 3 points, cercle 3 points,
 // contraintes en Ctrl+clic, désélection.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -26,7 +27,7 @@ const { chromium } = require("playwright");
   await click([c0[0] + 0.4, c0[1] - 0.3]); await click([c0[0] + 4, c0[1]]);
   let E = await ents();
   ok(E.length === 1 && E[0].type === "circle" && Math.abs(E[0].cx - 40) < 1e-6 && Math.abs(E[0].cy - c0[1]) < 1e-6, "cercle centré sur le trou : " + JSON.stringify(E[0]));
-  await p.screenshot({ path: "/tmp/claude-0/shots/90-centre.png" });
+  await p.screenshot({ path: TMP + "/shots/90-centre.png" });
   // cercle 3 points
   ok(await p.locator("#skMethod").isVisible(), "barre des façons de tracer visible");
   await p.click("#skMethod [data-m=circle3]");
@@ -44,7 +45,7 @@ const { chromium } = require("playwright");
   await click([0, -12]); await click([8, -6]); await click([5, -1]);
   E = await ents(); r = E.at(-1);
   ok(r.type === "rect" && Math.abs(r.w - 10) < 1e-6 && Math.abs(r.a - 36.87) < 0.01 && r.h > 0, "rectangle 3 points : " + JSON.stringify(r));
-  await p.screenshot({ path: "/tmp/claude-0/shots/91-methodes.png" });
+  await p.screenshot({ path: TMP + "/shots/91-methodes.png" });
   // le bouton reprend la dernière façon choisie
   ok(await p.evaluate(() => window.gabarit.sketcher.tool) === "rect3", "outil rect3 actif");
   // Échap : on arrête de tracer
@@ -64,7 +65,7 @@ const { chromium } = require("playwright");
   const txt = await p.locator("#relBox").innerText().catch(() => "");
   console.log("relBox:", txt.replace(/\n/g, " | "));
   ok(/Même diamètre/.test(txt) && /Concentriques/.test(txt), "Ctrl+clic : contraintes proposées pour deux cercles");
-  await p.screenshot({ path: "/tmp/claude-0/shots/92-ctrl-contraintes.png" });
+  await p.screenshot({ path: TMP + "/shots/92-ctrl-contraintes.png" });
   await p.click("#relBox >> text=Même diamètre"); await p.waitForTimeout(200);
   E = await ents();
   ok(Math.abs(E[0].d - E[1].d) < 1e-3, `même diamètre appliqué (${E[0].d} / ${E[1].d})`);

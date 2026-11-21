@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -14,7 +15,7 @@ const { chromium } = require("playwright");
   await pin.nth(3).fill("70"); await pin.nth(3).press("Tab"); // hauteur
   await wait();
   console.log("param change", JSON.stringify(await p.evaluate(() => [window.gabarit.st.errors, window.gabarit.st.info, window.gabarit.st.mesh.bb])));
-  await p.screenshot({ path: "/tmp/claude-0/shots/7-params.png" });
+  await p.screenshot({ path: TMP + "/shots/7-params.png" });
   // esquisse sur une face : la face du dessus du pied
   await p.click(".tbtn[data-tool=sketch]");
   await p.click("text=Une face de la pièce…");
@@ -38,13 +39,13 @@ const { chromium } = require("playwright");
   await wait();
   console.log("rev+pattern+mirror", JSON.stringify(await p.evaluate(() => [window.gabarit.st.errors, window.gabarit.st.mesh.bb, window.gabarit.st.lastMs])));
   await p.click("text=3D"); await p.waitForTimeout(300); await p.click("text=Recadrer"); await p.waitForTimeout(500);
-  await p.screenshot({ path: "/tmp/claude-0/shots/8-complex.png" });
+  await p.screenshot({ path: TMP + "/shots/8-complex.png" });
   // fin de pièce remontée
   await p.evaluate(() => { window.gabarit.st.stopAt = 2; }); 
   // ouvrir l'esquisse du profil en L
   await p.dblclick("#tree >> text=Profil en L");
   await p.waitForTimeout(800);
-  await p.screenshot({ path: "/tmp/claude-0/shots/9-edit-sketch.png" });
+  await p.screenshot({ path: TMP + "/shots/9-edit-sketch.png" });
   console.log(logs.join("\n") || "no errors");
   await b.close();
 })();

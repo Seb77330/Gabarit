@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 const S = (id, plane, ents, extra = {}) => ({ id, type: "sketch", name: id, plane, entities: ents, ...extra });
 const dessus = (o = "0") => ({ kind: "std", name: "dessus", offset: o });
@@ -13,7 +14,7 @@ const dessus = (o = "0") => ({ kind: "std", name: "dessus", offset: o });
     await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 120000 });
     const r = await p.evaluate(() => ({ err: window.gabarit.st.errors, vol: window.gabarit.st.mesh?.volume, bb: window.gabarit.st.mesh?.bb, ms: window.gabarit.st.lastMs }));
     console.log(name, JSON.stringify(r.err), "vol", r.vol && Math.round(r.vol), "bb", JSON.stringify(r.bb?.map((v) => v.map((x) => Math.round(x * 10) / 10))), "ms", Math.round(r.ms));
-    if (shot) await p.screenshot({ path: `/tmp/claude-0/shots/${shot}.png` });
+    if (shot) await p.screenshot({ path: `${TMP}/shots/${shot}.png` });
   };
   // 1. ellipse + courbe fermée + balayage sur courbe ouverte
   await run("ellipse/spline", { version: 1, name: "t1", material: "pla", params: [], features: [

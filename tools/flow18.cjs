@@ -1,4 +1,5 @@
 // v0.9.4 : étirer une pièce importée (3MF) dans une seule direction, puis la tourner.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -20,7 +21,7 @@ const { chromium } = require("playwright");
   await p.fill("[data-size=sz]", "25"); await p.press("[data-size=sz]", "Tab"); await idle();
   B = await bb(); ok(Math.abs(B[1][2] - B[0][2] - 25) < 0.01 && Math.abs(B[0][2]) < 0.01, "rehaussée à 25 mm, toujours posée sur z = 0");
   ok(Math.abs(await p.evaluate(() => window.gabarit.st.mesh.volume) - 70 * 30 * 25) < 1, "volume 70 × 30 × 25");
-  await p.screenshot({ path: "/tmp/claude-0/shots/98-etirer.png" });
+  await p.screenshot({ path: TMP + "/shots/98-etirer.png" });
   // proportions gardées
   await p.click("label.check >> text=Garder les proportions"); await p.waitForTimeout(200);
   await p.fill("[data-size=sy]", "60"); await p.press("[data-size=sy]", "Tab"); await idle();

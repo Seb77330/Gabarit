@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -20,19 +21,19 @@ const { chromium } = require("playwright");
   console.log("face", JSON.stringify(pt));
   await p.mouse.click(pt.x, pt.y); await p.waitForTimeout(300);
   console.log("faceAct", await p.locator("#faceAct").innerText().catch(() => "none"), JSON.stringify(await p.evaluate(() => ({ e: window.gabarit.st.pre.edges.length, f: window.gabarit.st.pre.faces.map((x) => x.info) }))));
-  await p.screenshot({ path: "/tmp/claude-0/shots/70-face.png" });
+  await p.screenshot({ path: TMP + "/shots/70-face.png" });
   await p.click("#faceAct >> text=Esquisser ici");
   await p.waitForTimeout(400);
   await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 60000 }); await p.waitForTimeout(500);
   console.log("sketch", await p.evaluate(() => [window.gabarit.st.editSketch, JSON.stringify(window.gabarit.doc.features.find((f) => f.id === window.gabarit.st.editSketch).plane), !!window.gabarit.viewer.sketchView, window.gabarit.sketcher?.refs?.edges?.length]));
-  await p.screenshot({ path: "/tmp/claude-0/shots/71-sketch-on-face.png" });
+  await p.screenshot({ path: TMP + "/shots/71-sketch-on-face.png" });
   // outil Reprendre : cliquer sur chaque arête plate
   await p.click(".sk-tools >> text=Reprendre");
   const edges = await p.evaluate(() => { const s = window.gabarit.sketcher; const r = s.svg.getBoundingClientRect(); return s.refs.edges.filter((e) => e.flat).map((e) => { const a = e.pts[0], b = e.pts[1]; const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; const q = s.toS(m); return [r.left + q[0], r.top + q[1]]; }); });
   console.log("flat edges", edges.length);
   for (const [x, y] of edges) { await p.mouse.move(x, y); await p.mouse.click(x, y); await p.waitForTimeout(80); }
   console.log("entities", JSON.stringify(await p.evaluate(() => window.gabarit.doc.features.find((f) => f.id === window.gabarit.st.editSketch).entities.map((e) => e.type + (e.pts ? ":" + e.pts.length : "")))));
-  await p.screenshot({ path: "/tmp/claude-0/shots/72-converted.png" });
+  await p.screenshot({ path: TMP + "/shots/72-converted.png" });
   console.log("errors", logs.length ? logs : "none");
   await b.close();
 })();

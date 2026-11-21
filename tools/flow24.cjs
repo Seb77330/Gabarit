@@ -1,4 +1,5 @@
 // v1.2 : arcs à tirer pour tourner une forme prête ou un fichier importé.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 const fs = require("fs");
 (async () => {
@@ -65,7 +66,7 @@ const fs = require("fs");
   let S = await size(); const diag = 90 / Math.SQRT2;
   ok(near(S[0], diag, 0.1) && near(S[1], diag, 0.1) && near(S[2], 20), "pièce recalculée, tournée de 45° autour de Z : " + S.map((x) => x.toFixed(2)).join(" × "));
   ok((await p.locator('#props [data-hk="rz"]').inputValue()) === "45", "le champ « Autour de Z » suit l’arc");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-tourner.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-tourner.png" });
   await turn("rz", 3.3, { shift: true });
   f = await feat("b1"); ok(f.rz === "48", "avec Maj, au degré près : " + f.rz);
   await p.keyboard.press("Control+z"); await idle();
@@ -84,7 +85,7 @@ const fs = require("fs");
   f = await feat("b1");
   ok(!t.facing && Number(f.rx) >= 35 && Number(f.rx) <= 65 && f.rz === "45", "arc X vu par la tranche, tiré d’environ −40° : " + f.rx + "°");
   await G(() => window.gabarit.viewer.fit([1, -1.3, 0.9])); await p.waitForTimeout(400);
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-tourner-2.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-tourner-2.png" });
   // au-delà de 180°, l'angle repart de −180°
   await load([{ ...box, rz: "170" }]);
   await p.click("#tree >> text=Boîte 1"); await p.waitForTimeout(500); await idle();
@@ -98,7 +99,7 @@ const fs = require("fs");
   // ---- tourner un fichier importé ----
   await load([{ ...box, a: "80", b: "20", h: "10" }]);
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("[data-act=stl]")]);
-  const stl = "/tmp/claude-0/shots/barre24.stl"; await dl.saveAs(stl);
+  const stl = TMP + "/shots/barre24.stl"; await dl.saveAs(stl);
   await G(() => { const g = window.gabarit; g.loadDoc({ version: 1, name: "Essai", material: "pla", params: [], features: [] }); }); await p.waitForTimeout(600);
   await p.setInputFiles("#fileIn", stl);
   await p.waitForFunction(() => window.gabarit.doc.features.some((f) => f.type === "import"), null, { timeout: 30000 });

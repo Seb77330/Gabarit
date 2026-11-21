@@ -1,4 +1,5 @@
 // v1.2 : double-clic sur une face = l'étape qui l'a faite s'ouvre, avec ses cotes près de la souris.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -35,7 +36,7 @@ const { chromium } = require("playwright");
   ok(await sel() === "Extrusion 1", "double-clic sur le côté de la plaque : « Extrusion 1 » s’ouvre");
   ok(/Extrusion 1/.test(t) && /Distance/.test(t) && /Largeur \(rectangle\)/.test(t) && /Hauteur \(rectangle\)/.test(t), "la carte montre l’épaisseur et les cotes du rectangle");
   ok(await G(() => document.activeElement?.dataset?.mk === "dist"), "la première cote est prête à être tapée");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v12-cotes.png" });
+  await p.screenshot({ path: TMP + "/shots/v12-cotes.png" });
   await p.keyboard.type("14"); await idle();
   ok((await p.locator('#props [data-hk="dist"]').inputValue()) === "14", "le panneau de gauche suit la carte");
   let v = await vol(); ok(v > v0 + 60 * 40 * 3.5, "la pièce s’épaissit en direct : " + v.toFixed(0) + " mm³");

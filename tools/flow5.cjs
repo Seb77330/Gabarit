@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -31,7 +32,7 @@ const { chromium } = require("playwright");
   const inputs = p.locator(".clist .citem input"); await inputs.nth(0).fill("60"); await inputs.nth(0).press("Tab");
   await p.waitForTimeout(300);
   console.log("pts", JSON.stringify((await sk()).entities[0].pts), JSON.stringify(await G(() => window.gabarit.sketcher.solveState)));
-  await p.screenshot({ path: "/tmp/claude-0/shots/30-constraints.png" });
+  await p.screenshot({ path: TMP + "/shots/30-constraints.png" });
   // glisser un sommet : la contrainte doit tenir
   e = (await sk()).entities[0];
   const s3 = await p.evaluate(([u, v]) => window.gabarit.sketcher.toS([u, v]), e.pts[3]);

@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -33,10 +34,10 @@ const { chromium } = require("playwright");
   });
   await p.mouse.click(ept.x, ept.y); await p.waitForTimeout(300);
   console.log("preselect", await G(() => [window.gabarit.st.pre.edges.length, window.gabarit.st.pre.faces.length]), await p.locator("#faceAct button").allInnerTexts());
-  await p.screenshot({ path: "/tmp/claude-0/shots/80-preselect.png" });
+  await p.screenshot({ path: TMP + "/shots/80-preselect.png" });
   await p.click("#faceAct >> text=Congé"); await idle(); await p.waitForTimeout(400);
   console.log("fillet", await G(() => { const f = window.gabarit.doc.features.at(-1); return [f.type, f.edges.length, window.gabarit.st.pick?.kind, JSON.stringify(window.gabarit.st.info[f.id] || {}), window.gabarit.st.errors, document.querySelector("#status").innerText.slice(0, 40)]; }));
-  await p.screenshot({ path: "/tmp/claude-0/shots/81-fillet.png" });
+  await p.screenshot({ path: TMP + "/shots/81-fillet.png" });
   await p.keyboard.press("Enter"); await p.waitForTimeout(200);
   console.log("validated", await G(() => [window.gabarit.st.pick, window.gabarit.st.sel]));
   // 3) Extrusion d'abord (sans esquisse libre) : le bouton vert porte le nom de l'action

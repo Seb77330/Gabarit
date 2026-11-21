@@ -6,7 +6,8 @@ import { zipStore } from "./meshfiles.js";
 const MAX_TRIS = 20000;
 import { ICONS, SHAPE_ICONS } from "./icons.js";
 import { evalExpr, varsMap } from "./expr.js";
-import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, toWorld, STD_PLANES, cross, dot, norm, scale } from "./geo.js";
+import { resolvePlane as resolvePlaneRaw, refPlanes, evalEntity, outline, isOpen, toWorld, STD_PLANES, cross, dot, norm, scale } from "./geo.js";
+import { arrange } from "./regions.js";
 import { exampleDoc } from "./example.js";
 import { TEMPLATES, CHALLENGES } from "./templates.js";
 import { readDrawing, drawingEntities } from "./drawfiles.js";
@@ -257,7 +258,7 @@ function loadDoc(d, fit = true) {
   }
   if (wasAsm) { renderTools(); viewer.setMesh(null); viewer.setPick(null); banner(null); if (viewer.section) toggleSection(); }
   st.sel = null; st.stopAt = null; st.errors = {}; closeSketch(true); stopPick();
-  hist = []; hidx = -1; pushHistory();
+  hist = []; hidx = -1; pushHistory(); goodSnap = null;
   st.firstFit = fit; renderAll(); requestBuild();
 }
 
@@ -298,7 +299,7 @@ function restartWorker() {
   restarts = restarts.filter((t) => Date.now() - t < 30000); restarts.push(Date.now());
   if (restarts.length > 3) { showBusy(false); toast("Le moteur 3D bloque sur cette pièce. Annule la dernière modification (Ctrl+Z)."); return; } try { worker.terminate(); } catch { /* déjà arrêté */ } workerReady = false; st.building = false; startWorker(); }
 function onWorker(m) {
-  if (m.type === "ready") { workerReady = true; clearTimeout(readyTimer); engineFailed = false; $(".engine-fail")?.remove(); showBusy(false); renderStatus(); if (isAsm()) asmUI.undoRefresh(); else requestBuild(0); return; }
+  if (m.type === "ready") { workerReady = true; clearTimeout(readyTimer); engineFailed = false; $(".engine-fail")?.remove(); showBusy(false); renderStatus(); if (isAsm()) asmUI.undoRefresh(); else if (skipBuild) skipBuild = false; else requestBuild(0); return; }
   if (m.type === "built" && m.preview) {
     if (m.req === buildReq && st.pick) {
       viewer.setGhost(m.mesh);
@@ -309,6 +310,7 @@ function onWorker(m) {
   }
   if (m.type === "built") {
     if (m.req !== buildReq) return;
+    goodSnap = sentSnap;
     // pendant une sélection, la pièce affichée s'arrête avant l'étape : on calcule en plus l'aperçu du résultat
     const pf = st.pick?.featId ? feat(st.pick.featId) : null;
     if (m.regions && st.pick?.kind === "regions" && pf) { st.regions = m.regions; viewer.setRegions(m.regions, regionSel(pf)); }
@@ -330,6 +332,7 @@ function onWorker(m) {
   if (m.type === "drawing") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.views); return; }
   if (m.type === "exported") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.blob); return; }
   if (m.type === "whose") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.owner); return; }
+  if (m.type === "fixed") { const cb = pendingExport.get(m.req); pendingExport.delete(m.req); cb?.(m.value); return; }
   if (m.type === "error" && !workerReady) { engineFail(m.message); return; }
   if (m.type === "error" && /Aborted|RuntimeError|memory/i.test(m.message)) { restartWorker(); toast("Le moteur 3D a redémarré après une erreur. Vérifie la dernière valeur saisie."); return; }
   if (m.type === "error") { showBusy(false); st.building = false; const cb = pendingExport.get(m.req); if (cb) { pendingExport.delete(m.req); toast(m.message); } else toast("Erreur du noyau 3D : " + m.message); }
@@ -344,11 +347,34 @@ function requestBuild(delay = 150) {
   buildTimer = setTimeout(() => {
     if (!workerReady) return;
     if (isAsm()) return;
-    buildReq++; st.building = true;
+    buildReq++; st.building = true; buildStart = Date.now(); sentSnap = JSON.stringify(doc);
+    const mine = buildReq;
     setTimeout(() => { if (st.building) showBusy(true); }, 250);
+    setTimeout(() => { if (st.building && buildReq === mine) { showBusy(true, "Calcul long… Échap pour l’annuler"); $("#busy").classList.add("long"); } }, 2500);
     const rf = st.pick?.kind === "regions" ? feat(st.pick.featId) : null;
     worker.postMessage({ type: "build", req: buildReq, doc, stopAt: currentStopAt(), regionsOf: rf?.sketch });
   }, delay);
+}
+// Annule le calcul en cours (Échap) : le moteur 3D est relancé et on revient à la dernière version calculée.
+let buildStart = 0, sentSnap = null, goodSnap = null, skipBuild = false;
+function cancelBuild() {
+  if (!st.building || isAsm()) return false;
+  clearTimeout(buildTimer); buildReq++;
+  // le champ en cours de saisie est lâché : sa valeur entre dans l'historique et Ctrl+Z la retrouve
+  const act = document.activeElement; if (act && act.closest?.("#props")) act.blur();
+  try { worker.terminate(); } catch { /* déjà arrêté */ }
+  workerReady = false; st.building = false; showBusy(false);
+  const now = JSON.stringify(doc);
+  if (goodSnap && goodSnap !== now) {
+    pushHistory(); // la modification annulée reste dans l'historique (Ctrl+Z la retrouve)
+    doc = JSON.parse(goodSnap);
+    if (st.sel && !feat(st.sel)) st.sel = null;
+    if (st.editSketch && !feat(st.editSketch)) closeSketch(true);
+    stopPick(false); pushHistory(); renderAll();
+    toast("Calcul annulé : retour à la dernière version calculée. Ctrl+Z retrouve ta modification.");
+  } else { skipBuild = true; toast("Calcul annulé. Modifie la pièce ou mets une étape en pause : le calcul repartira."); }
+  startWorker();
+  return true;
 }
 let exportReq = 1e6;
 function doExport(kind) {
@@ -440,7 +466,7 @@ const TOOL_TIPS = {
   extrude: "Donner de l’épaisseur à une esquisse",
   cut: "Creuser la pièce avec une esquisse",
   revolve: "Faire tourner une esquisse autour d’un axe (pièces de tour)",
-  hole: "Percer des trous simples, lamés ou fraisés",
+  hole: "Percer des trous simples, lamés ou fraisés, aux cotes d’une vis ou d’un insert",
   fillet: "Arrondir des arêtes",
   chamfer: "Casser des arêtes en biais",
   shell: "Évider la pièce en gardant une paroi",
@@ -674,6 +700,12 @@ function pickFacePlane(cb) {
 function crossingContours(sk) {
   if (!sk) return false;
   const v = varsMap(doc.params); const L = [];
+  // avec des traits ouverts : il y a un choix à faire dès qu'ils découpent plus de zones qu'il n'y a de contours
+  const evs = []; for (const e of sk.entities || []) { try { const o = evalEntity(e, v); if (!o.construction && o.type !== "point" && o.type !== "text") evs.push(o); } catch { /* ignorée */ } }
+  if (evs.some(isOpen)) {
+    const open = evs.filter(isOpen);
+    return arrange(evs).faces.length > evs.length - open.length + arrange(open).outers.length;
+  }
   for (const e of sk.entities || []) { try { const o = evalEntity(e, v); if (o.type === "point" || o.type === "text" || o.construction || o.type === "path" || (o.type === "spline" && !o.closed)) continue; L.push(outline(o)); } catch { /* ignorée */ } }
   const segX = (a, b, c, d) => { const r = (p, q, s2) => (q[0] - p[0]) * (s2[1] - p[1]) - (q[1] - p[1]) * (s2[0] - p[0]); const d1 = r(c, d, a), d2 = r(c, d, b), d3 = r(a, b, c), d4 = r(a, b, d); return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0)) && d1 && d2 && d3 && d4; };
   for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
@@ -934,6 +966,34 @@ function addParam() {
   setTimeout(() => { const ins = $("#params").querySelectorAll(".param input"); ins[ins.length - 2]?.select(); }, 0);
 }
 
+// Trous pour vis, diamètres courants en mm. pass : la vis passe librement (ISO 273, série moyenne) ; tap : la vis fait son filet
+// dans le plastique (avant-trou) ; insert : insert à chaud en laiton ; head : logement d'une tête cylindrique [diamètre, profondeur] ;
+// cone : diamètre d'une tête fraisée à 90°.
+const SCREWS = {
+  M2: { pass: 2.4, tap: 1.6, insert: 3.2, head: [4.3, 2.2], cone: 4 },
+  "M2,5": { pass: 2.9, tap: 2.1, head: [5, 2.7], cone: 5 },
+  M3: { pass: 3.4, tap: 2.5, insert: 4, head: [6, 3.2], cone: 6.8 },
+  M4: { pass: 4.5, tap: 3.3, insert: 5.6, head: [7.5, 4.2], cone: 9 },
+  M5: { pass: 5.5, tap: 4.2, insert: 6.4, head: [9, 5.2], cone: 11.2 },
+  M6: { pass: 6.6, tap: 5, insert: 8, head: [10.5, 6.2], cone: 13.5 },
+  M8: { pass: 9, tap: 6.8, head: [13.5, 8.2], cone: 18 },
+};
+const SCREW_USE = [["", "Diamètre libre"], ["pass", "Laisser passer une vis"], ["tap", "Visser dans le plastique"], ["insert", "Poser un insert à chaud"]];
+// Met le trou aux bonnes cotes pour la vis choisie (f.fit, f.screw).
+function applyScrew(f) {
+  const sc = SCREWS[f.screw]; if (!f.fit || !sc?.[f.fit]) return;
+  f.d = String(sc[f.fit]);
+  if (f.fit === "pass" && f.kind === "lame") { f.d2 = String(sc.head[0]); f.depth2 = String(sc.head[1]); }
+  if (f.fit === "pass" && f.kind === "fraise") { f.d2 = String(sc.cone); f.angle = "90"; }
+}
+function screwNote(f) {
+  const sc = SCREWS[f.screw]; if (!f.fit || !sc?.[f.fit]) return null;
+  const d = nf(sc[f.fit], 2);
+  if (f.fit === "pass") return `La vis ${f.screw} passe librement dans un trou de ${d} mm.` + (f.kind === "lame" ? " Le logement cache une tête cylindrique." : f.kind === "fraise" ? " La fraisure reçoit une tête conique à 90°." : "");
+  if (f.fit === "tap") return `La vis ${f.screw} fait son filet dans un trou de ${d} mm. Visse doucement la première fois.`;
+  return `Insert ${f.screw} en laiton : trou de ${d} mm, valeur courante. Vérifie la fiche de tes inserts, et prévois un trou plus profond que l’insert d’au moins 1 mm.`;
+}
+
 // ---------- Panneau de réglages ----------
 function exprField(label, obj, key, unit = "mm", opts = {}) {
   const v = varsMap(doc.params);
@@ -1005,7 +1065,58 @@ function sketchOptions(f) {
   const i = featIndex(f.id);
   return doc.features.slice(0, i).filter((x) => x.type === "sketch").map((x) => [x.id, x.name]);
 }
+// Message d'erreur d'une étape, avec le ou les boutons qui la réparent.
+const FIX_KEYS = { fillet: ["r", "mm"], chamfer: ["r", "mm"], shell: ["t", "mm"], draft: ["angle", "°"] };
+function errorNote(f) {
+  const msg = st.errors[f.id]; const btns = [];
+  const B = (label, fn, id) => btns.push(h("button", { class: "btn", "data-fix": id, onclick: fn }, label));
+  const fk = FIX_KEYS[f.type];
+  if (fk && /noyau 3D|impossible/i.test(msg)) B("Trouver la plus grande valeur qui marche", () => findWorkingValue(f, fk[0], fk[1]), "value");
+  if (/n’exist(e|ent) plus/.test(msg)) {
+    if (f.type === "fillet" || f.type === "chamfer") B("Choisir les arêtes à nouveau", () => { mutate(() => { f.edges = []; }); startPick("edges", f.id); }, "pick");
+    else if (f.type === "shell" || f.type === "draft") B("Choisir les faces à nouveau", () => { mutate(() => { f.faces = []; }); startPick("faces", f.id); }, "pick");
+  }
+  if (/aucun contour fermé/.test(msg) && f.sketch && feat(f.sketch)) B("Ouvrir l’esquisse", () => openSketch(f.sketch), "sketch");
+  return h("div", { class: "note err" }, h("div", {}, msg), btns.length ? h("div", { class: "fixes" }, btns) : null);
+}
+// Cherche, avec le moteur 3D, la plus grande valeur du réglage « key » pour laquelle l'étape se calcule.
+let fixBusy = false;
+function findWorkingValue(f, key, unit) {
+  if (fixBusy || !workerReady) return;
+  let cur; try { cur = evalExpr(f[key], varsMap(doc.params)); } catch { cur = NaN; }
+  if (!(cur > 0)) { toast("Écris d’abord une valeur plus grande que 0."); return; }
+  fixBusy = true; toast("Je cherche la plus grande valeur qui marche…");
+  const req = ++exportReq;
+  pendingExport.set(req, (v) => {
+    fixBusy = false;
+    if (!feat(f.id)) return;
+    if (!(v > 0)) { toast("Aucune valeur ne marche ici : le problème vient d’ailleurs (arêtes ou faces choisies, forme de la pièce)."); return; }
+    mutate(() => { f[key] = String(v); }); renderProps();
+    toast(`${nf(cur, 2)} ${unit} ne passait pas : valeur réglée à ${nf(v, 2)} ${unit}, la plus grande qui marche.`);
+  });
+  worker.postMessage({ type: "fix", req, doc, id: f.id, key, value: cur });
+}
+// Le panneau est redessiné après chaque calcul : on garde le champ en cours de saisie, le curseur et le défilement.
 function renderProps() {
+  const P = $("#props"); const act = document.activeElement; let keep = null;
+  if (act && P.contains(act) && /^(INPUT|SELECT|TEXTAREA)$/.test(act.tagName)) {
+    const all = [...P.querySelectorAll("input, select, textarea")];
+    keep = { idx: all.indexOf(act), n: all.length, hk: act.dataset.hk || "", tag: act.tagName, s: null, e: null, top: P.scrollTop };
+    try { keep.s = act.selectionStart; keep.e = act.selectionEnd; } catch { /* champ sans curseur */ }
+  }
+  const top = P.scrollTop;
+  drawProps();
+  if (top) P.scrollTop = top;
+  if (!keep) return;
+  const all = [...P.querySelectorAll("input, select, textarea")];
+  let el = all.length === keep.n ? all[keep.idx] : null;
+  if (el && (el.tagName !== keep.tag || (el.dataset.hk || "") !== keep.hk)) el = null;
+  if (!el && keep.hk) { const same = all.filter((x) => x.dataset.hk === keep.hk && x.tagName === keep.tag); if (same.length === 1) el = same[0]; }
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  if (typeof keep.s === "number" && el.setSelectionRange) { try { el.setSelectionRange(keep.s, keep.e); } catch { /* type de champ sans sélection */ } }
+}
+function drawProps() {
   const P = $("#props"); P.innerHTML = "";
   layoutMode();
   if (st.editSketch) { renderSketchProps(P); return; }
@@ -1021,7 +1132,7 @@ function renderProps() {
   const head = h("div", { class: "head" }, h("span", { class: "ic", html: ICONS[TYPES[f.type].icon] }),
     h("input", { value: f.name, "aria-label": "Nom de l’étape", onchange: (e) => { mutate(() => { f.name = e.target.value.trim() || f.name; }); } }));
   P.append(head);
-  if (st.errors[f.id]) P.append(h("div", { class: "note err" }, st.errors[f.id]));
+  if (st.errors[f.id]) P.append(errorNote(f));
   const add = (...els) => P.append(...els.flat().filter(Boolean));
   const vars = varsMap(doc.params);
 
@@ -1062,8 +1173,18 @@ function renderProps() {
   if (f.type === "hole") {
     add(planeFields(f));
     add(checkField("Percer dans l’autre sens", f, "flip"));
-    add(segField("Type de trou", f, "kind", [["simple", "Simple"], ["lame", "Lamé"], ["fraise", "Fraisé"]]));
-    add(exprField("Diamètre du trou", f, "d", "mm", { step: 0.5 }));
+    const useSel = selectField("Ce trou sert à", f.fit || "", SCREW_USE, (v) => { mutate(() => { f.fit = v; if (v) { if (!SCREWS[f.screw]?.[v]) f.screw = "M3"; if (v !== "pass") f.kind = "simple"; applyScrew(f); } }); renderProps(); });
+    useSel.querySelector("select").id = "holeUse"; add(useSel);
+    if (f.fit) {
+      const sizeSel = selectField("Vis", f.screw || "M3", Object.keys(SCREWS).filter((k) => SCREWS[k][f.fit]).map((k) => [k, k]), (v) => { mutate(() => { f.screw = v; applyScrew(f); }); renderProps(); });
+      sizeSel.querySelector("select").id = "holeScrew"; add(sizeSel);
+    }
+    if (!f.fit || f.fit === "pass") add(h("div", { class: "field" }, h("label", {}, "Type de trou"), h("div", { class: "seg" },
+      [["simple", "Simple"], ["lame", "Lamé"], ["fraise", "Fraisé"]].map(([val, text]) => h("button", { class: f.kind === val ? "on" : "", onclick: () => { mutate(() => { f.kind = val; applyScrew(f); }); renderProps(); } }, text)))));
+    // une cote tapée à la main : le trou redevient « diamètre libre »
+    const free = () => { if (f.fit) { f.fit = ""; const u = $("#holeUse"); if (u) u.value = ""; $("#holeScrew")?.closest(".field")?.remove(); $("#holeNote")?.remove(); } };
+    add(exprField("Diamètre du trou", f, "d", "mm", { step: 0.5, after: free }));
+    if (screwNote(f)) add(h("div", { class: "note", id: "holeNote" }, screwNote(f)));
     add(checkField("Traversant", f, "through"));
     if (!f.through) add(exprField("Profondeur", f, "depth"));
     if (f.kind === "lame") add(exprField("Diamètre du lamage", f, "d2"), exprField("Profondeur du lamage", f, "depth2"));
@@ -1387,7 +1508,7 @@ function constraintPanel(f) {
 }
 
 // ---------- Mode esquisse ----------
-const SK_TOOLS = [["select", "Choisir"], ["line", "Ligne"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"], ["convert", "Reprendre"]];
+const SK_TOOLS = [["select", "Choisir"], ["line", "Ligne"], ["rect", "Rectangle"], ["circle", "Cercle"], ["slot", "Rainure"], ["polygon", "Polygone"], ["ellipse", "Ellipse"], ["poly", "Contour libre"], ["spline", "Courbe"], ["path", "Chemin"], ["text", "Texte"], ["trim", "Ajuster"], ["fillet", "Congé"], ["convert", "Reprendre"]];
 // Façons de tracer un rectangle ou un cercle (le bouton reprend la dernière choisie).
 const SK_FAM = {
   rect: [["rect", "Coin à coin"], ["rectc", "Depuis le centre"], ["rect3", "3 points (incliné)"]],
@@ -1397,7 +1518,7 @@ const famOf = (t) => Object.keys(SK_FAM).find((k) => SK_FAM[k].some(([x]) => x =
 const skMode = { rect: "rect", circle: "circle" };
 const SK_ALL = SK_TOOLS.flatMap(([k, l]) => SK_FAM[k] ? SK_FAM[k].map(([v, vl]) => [v, `${l} : ${vl.toLowerCase()}`]) : [[k, l]]);
 const SK_HINTS = {
-  line: "Clique le début puis chaque point : les traits s’enchaînent. Reclique sur le premier point pour fermer le contour. Double-clic, Entrée ou Échap : finir la ligne.",
+  line: "Clique le début puis chaque point : les traits s’enchaînent. Reclique sur le premier point pour fermer le contour. Double-clic, Entrée ou Échap : finir la ligne. Un rond orange signale un bout de trait qui ne touche rien ; une zone bien fermée se colore.",
   rectc: "Clique au centre, puis à un coin.",
   rect3: "Clique les deux bouts d’un côté, puis un troisième point pour la largeur.",
   circle3: "Clique trois points par lesquels le cercle doit passer.",
@@ -1412,6 +1533,8 @@ const SK_HINTS = {
   spline: "Courbe lisse qui passe par chaque point cliqué. Reclique sur le premier point pour la fermer, ou double-clique (Entrée) pour la laisser ouverte, par exemple pour un balayage.",
   path: "Chemin ouvert pour un balayage : clique chaque point, puis double-clique ou Entrée pour finir.",
   convert: "Clique sur une arête de la pièce (en pointillé) pour la reprendre dans l’esquisse. Les arêtes qui se touchent se raccordent ; un tour fermé devient un contour qu’on peut extruder.",
+  trim: "Passe sur un trait : le morceau en rouge, entre deux croisements, est celui qui sera retiré. Clique pour le couper. Un trait qui ne croise rien est retiré en entier.",
+  fillet: "Règle le rayon à gauche, puis clique sur un coin entre deux traits droits. Le rayon reste modifiable ensuite, dans la liste des points. Rayon 0 : le coin redevient vif.",
 };
 let sketcher;
 function openSketch(id, isNew = false) {
@@ -1529,6 +1652,13 @@ function renderSketchProps(P) {
     P.append(h("h2", {}, fam === "rect" ? "Type de rectangle" : "Type de cercle"),
       h("div", { class: "skm-list" }, ...SK_FAM[fam].map(([v, l]) => h("button", { class: "skm" + (sketcher.tool === v ? " on" : ""), "data-m": v, onclick: () => sketcher.setTool(v) }, h("span", { html: ICONS[v] }), l))));
   }
+  if (sketcher.tool === "fillet") {
+    const inp = h("input", { type: "text", id: "filletR", value: String(sketcher.filletR ?? 2).replace(".", ","), inputmode: "decimal", spellcheck: "false",
+      oninput: (ev) => { const v = Number(ev.target.value.replace(",", ".")); const bad = !(v >= 0); ev.target.classList.toggle("bad", bad); if (!bad) sketcher.filletR = v; } });
+    P.append(h("h2", {}, "Congé"), h("div", { class: "field" }, h("label", {}, "Rayon du congé"), h("div", { class: "in" }, inp, h("span", { class: "unit" }, "mm"))),
+      h("div", { class: "note" }, "Clique sur un coin du dessin pour l’arrondir. Avec 0, le coin cliqué redevient vif."));
+  }
+  if (sketcher.tool === "trim") P.append(h("h2", {}, "Ajuster"), h("div", { class: "note" }, "Le morceau en rouge sous le pointeur est retiré au clic. Les formes coupées deviennent des traits : une zone se ferme dès que les traits se rejoignent."));
   P.append(...planeFields(f));
   const ents = f.entities || [];
   const e = ents.find((x) => x.id === st.skSel);
@@ -1549,12 +1679,13 @@ function renderSketchProps(P) {
     if (e.type === "spline") P.append(h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!e.closed, onchange: (ev) => { mutate(() => { e.closed = ev.target.checked; }); renderProps(); } }), "Courbe fermée"));
     if (e.type === "poly" || e.type === "path" || e.type === "spline") {
       if (e.type === "poly") P.append(F("Congé des angles", "r"));
-      P.append(h("h2", {}, e.type === "spline" ? "Points de passage (X, Y)" : "Points (X, Y, flèche de l’arc)"));
+      P.append(h("h2", {}, e.type === "spline" ? "Points de passage (X, Y)" : "Points (X, Y, flèche de l’arc, rayon du coin)"));
       const box = h("div", { class: "pts" });
       e.pts.forEach((p, i) => {
         const mk = (j) => h("input", { value: p[j], "aria-label": j ? "Y" : "X", oninput: (ev) => mutate(() => { p[j] = ev.target.value; }, true), onchange: () => pushHistory() });
         const mk3 = e.type === "spline" ? h("span") : h("input", { value: p[2] ?? "", placeholder: "0", title: "Flèche : courbe le côté qui part de ce point (0 = droit)", oninput: (ev) => mutate(() => { p[2] = ev.target.value; }, true), onchange: () => pushHistory() });
-        box.append(h("div", { class: "pt pt3" }, String(i + 1), mk(0), mk(1), mk3, h("button", { class: "x", title: "Retirer ce point", onclick: () => { if (e.pts.length <= (e.type === "path" || (e.type === "spline" && !e.closed) ? 2 : 3)) { toast("Il n’y a pas assez de points."); return; } mutate(() => { e.pts.splice(i, 1); f.constraints = (f.constraints || []).filter((c) => (c.refs || []).every((r) => r.e !== e.id)); }); renderProps(); } }, "✕")));
+        const mk4 = e.type === "spline" ? null : h("input", { value: p[3] ?? "", placeholder: "0", "data-rc": i, title: "Rayon du coin : arrondit ce coin entre deux côtés droits (0 = coin vif)", oninput: (ev) => mutate(() => { if (p[2] === undefined || p[2] === null) p[2] = 0; p[3] = ev.target.value; }, true), onchange: () => pushHistory() });
+        box.append(h("div", { class: "pt " + (mk4 ? "pt4" : "pt3") }, String(i + 1), mk(0), mk(1), mk3, mk4, h("button", { class: "x", title: "Retirer ce point", onclick: () => { if (e.pts.length <= (e.type === "path" || (e.type === "spline" && !e.closed) ? 2 : 3)) { toast("Il n’y a pas assez de points."); return; } mutate(() => { e.pts.splice(i, 1); f.constraints = (f.constraints || []).filter((c) => (c.refs || []).every((r) => r.e !== e.id)); }); renderProps(); } }, "✕")));
       });
       P.append(box);
     }
@@ -1966,7 +2097,7 @@ setTimeout(watchVersion, 5000); setInterval(watchVersion, 20 * 60 * 1000);
 // ---------- Divers ----------
 let toastTimer;
 function toast(msg) { const t = $("#toast"); t.textContent = fr(msg); t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3800); }
-function showBusy(on, text = "Calcul…") { const b = $("#busy"); b.hidden = !on; if (on) b.lastChild.textContent = fr(text); }
+function showBusy(on, text = "Calcul…") { const b = $("#busy"); b.hidden = !on; b.classList.remove("long"); if (on) b.lastChild.textContent = fr(text); }
 function layoutMode() {
   const M = document.querySelector("main");
   M.classList.toggle("asm", isAsm()); M.classList.toggle("editing", !isAsm() && !!(st.editSketch || feat(st.sel)));
@@ -2085,11 +2216,14 @@ function help() {
     <h3>Fichiers d’impression 3D</h3><p>Ouvre un STL ou un 3MF, puis clique sur son étape. <b>Taille</b> l’étire dans un seul sens. <b>Allonger seulement une zone</b> étire le milieu entre deux plans sans déformer les bouts (trous, clips, pas de vis). <b>Coupe à plat</b> enlève tout ce qui dépasse d’un côté d’un plan : pratique pour raccourcir ou retirer un socle.</p>
     <h3>Modèles de départ</h3><p>Sur l’écran d’accueil, quatre objets tout faits (porte-clés, boîte, crochet, support de téléphone) : ouvre-en un, clique sur ses étapes à gauche et change les tailles ou le texte. Juste en dessous, trois <b>mini-défis</b> te guident pas à pas pour fabriquer ton premier objet.</p>
     <h3>1. L’esquisse</h3><p>Clique sur <b>Esquisse</b>, choisis un plan (ou une face de la pièce), puis dessine des rectangles, cercles, rainures, polygones ou un contour libre. Tape les cotes exactes à droite. Une forme placée dans une autre devient un trou.</p>
+    <h3>Traits, zones et retouches</h3><p>Plusieurs traits qui se rejoignent forment un contour : la zone fermée <b>se colore</b>, et un <b>rond orange</b> signale un bout de trait qui ne touche rien. Près d’un trait ou d’un cercle, le point que tu poses s’accroche dessus. Un trait qui traverse une forme la coupe en deux : à l’extrusion, clique les zones à garder. <b>Ajuster</b> retire le morceau de trait survolé, entre deux croisements. <b>Congé</b> arrondit le coin cliqué ; son rayon reste modifiable dans la liste des points.</p>
     <h3>2. Le volume</h3><p><b>Extrusion</b> donne de l’épaisseur, <b>Enlèvement</b> creuse, <b>Révolution</b> fait tourner le profil autour d’un axe (pour les pièces rondes).</p>
-    <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
+    <h3>3. Les finitions</h3><p><b>Perçage</b> : clique sur la face, puis place les trous. Avec « Ce trou sert à », choisis une vis (M2 à M8) : le diamètre se règle tout seul pour laisser passer la vis, la visser dans le plastique ou poser un insert à chaud. <b>Congé</b> et <b>Chanfrein</b> : clique sur les arêtes. <b>Coque</b> : clique sur la face à ouvrir.</p>
+    <h3>Avant d’imprimer</h3><p><b>Impression 3D</b> vérifie la pièce pour ton imprimante : elle tient sur le plateau (au besoin en la tournant), les zones à soutenir, les ponts trop longs et les parois trop fines pour ta buse sont coloriés sur la pièce. Ce sont des estimations : ton trancheur garde le dernier mot.</p>
+    <h3>Quand ça coince</h3><p>Une étape en erreur propose un bouton pour la corriger : trouver la plus grande valeur qui marche, choisir les arêtes à nouveau, ou ouvrir l’esquisse. Si un calcul dure, <b>Échap</b> l’annule et la pièce revient à sa dernière version calculée.</p>
     <h3>Formes avancées</h3><p><b>Plan</b> crée un plan décalé ou incliné pour y dessiner. <b>Lissage</b> relie plusieurs esquisses posées sur des plans différents. <b>Balayage</b> fait glisser un profil le long d’un <b>Chemin</b> (outil de l’esquisse). <b>Dépouille</b> incline des faces. <b>Répétition</b> et <b>Symétrie</b> copient toute la pièce ou seulement les fonctions choisies, en ligne, en grille ou en cercle. Dans un contour libre, tire le rond au milieu d’un côté pour le courber.</p>
     <h3>Plus de fonctions</h3><p>Dans l’esquisse : <b>Ellipse</b>, <b>Courbe</b> (lisse, passe par tes points), <b>Texte</b> (gravé dans un contour, en relief tout seul), et pour une forme choisie : <b>Symétrie</b> et <b>Décalage</b>. Dans la pièce : <b>Ressort</b>, <b>Filetage</b> (clique sur un axe ou un trou, le pas ISO est proposé), <b>Nervure</b> (un simple trait d’esquisse entre deux parois) et, dans une extrusion, <b>Jusqu’à : une face</b>. <b>Autres formats</b> : 3MF, OBJ, et DXF d’une esquisse pour la découpe laser.</p>
-    <h3>Gagner du temps</h3><p><b>Ctrl+K</b> (ou « Rechercher ») : tape ce que tu veux faire, par exemple « trou », « arrondir » ou « filet ». <b>Partager</b> donne un lien qui contient toute la pièce. <b>Versions</b> garde des états de ta pièce pour y revenir. Dans les paramètres, <b>+ Variante</b> enregistre un jeu de valeurs (M6, M8…) que tu rappelles en un clic. <b>Impression 3D</b> colore les surplombs à soutenir et pose la pièce à plat automatiquement pour l’export STL et 3MF.</p>
+    <h3>Gagner du temps</h3><p><b>Ctrl+K</b> (ou « Rechercher ») : tape ce que tu veux faire, par exemple « trou », « arrondir » ou « filet ». <b>Partager</b> donne un lien qui contient toute la pièce. <b>Versions</b> garde des états de ta pièce pour y revenir. Dans les paramètres, <b>+ Variante</b> enregistre un jeu de valeurs (M6, M8…) que tu rappelles en un clic. <b>Impression 3D</b> contrôle la pièce avant l’impression et la pose à plat automatiquement pour l’export STL et 3MF.</p>
     <h3>Outils</h3><p><b>Mesurer</b> : clique deux points. <b>Coupe</b> : regarde l’intérieur. <b>Mise en plan</b> : le plan 2D coté de ta pièce, à imprimer ou en PDF. <b>Importer</b> : ajoute un fichier STL, 3MF ou STEP, que tu peux ensuite étirer dans un seul sens, tourner et modifier. Coche « Centre de gravité » en bas pour l’afficher.</p>
     <h3>Assemblages</h3><p><b>Nouveau → Assemblage</b>, puis <b>Insérer une pièce</b> : tes pièces sont rangées automatiquement dans <b>Mes pièces</b>. La première pièce est fixe. <b>Coïncidence</b> plaque deux faces planes, <b>Concentrique</b> aligne un axe dans un trou, <b>Distance</b> écarte deux faces. Ensuite : <b>Interférences</b> (les pièces se chevauchent-elles ?), <b>Vue éclatée</b>, <b>Nomenclature</b> (liste des pièces avec masses, exportable en tableur) et export STEP de tout l’assemblage.</p>
     <h3>4. L’historique</h3><p>À gauche, chaque étape reste modifiable : clique dessus et change ses valeurs, la pièce se recalcule. Glisse la ligne bleue « Fin de la pièce » vers le haut pour revenir en arrière dans la construction.</p>
@@ -2292,7 +2426,7 @@ const extras = createExtras({
 });
 const KEYS = {
   sketch: "dessin profil 2d croquis", extrude: "volume epaisseur bossage tirer", cut: "creuser enlever percer poche", revolve: "tourner tour axe rond",
-  hole: "trou percer vis fraisage lamage", fillet: "arrondi arrondir rayon conge", chamfer: "biseau casser angle", shell: "evider creux boite paroi",
+  hole: "trou percer vis fraisage lamage insert ecrou m3 m4 m5 passage", fillet: "arrondi arrondir rayon conge", chamfer: "biseau casser angle", shell: "evider creux boite paroi",
   thread: "filet filetage vis taraud taraudage m3 m4 m5 m6 m8 m10 m12", helix: "ressort helice spirale", rib: "renfort raidisseur gousset",
   mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
   draft: "demoulage incliner", import: "step stl ouvrir modele svg dxf logo dessin", measure: "distance cote longueur", section: "couper interieur",
@@ -2307,7 +2441,8 @@ function commandList() {
     { label: "Mode Expert", hint: "Tous les outils", keys: "avance complet solidworks cao", run: () => setMode("expert") },
     { label: "Thème sombre", keys: "nuit noir dark couleur", run: () => applyTheme("dark") },
     { label: "Thème clair", keys: "jour blanc light couleur", run: () => applyTheme("light") });
-  for (const [k, label] of SK_ALL) L.push({ label: `Esquisse : ${label}`, keys: "dessiner " + k, when: () => !!st.editSketch, run: () => sketcher.setTool(k) });
+  const skKeys = { trim: " couper rogner raccourcir enlever ce qui dépasse ciseaux", fillet: " arrondir coin rayon arrondi", line: " trait droite segment" };
+  for (const [k, label] of SK_ALL) L.push({ label: `Esquisse : ${label}`, keys: "dessiner " + k + (skKeys[k] || ""), when: () => !!st.editSketch, run: () => sketcher.setTool(k) });
   const act = (a) => document.querySelector(`[data-act=${a}]`)?.click();
   L.push(
     { label: "Nouvelle pièce ou nouvel assemblage", keys: "nouveau creer", run: () => newDialog() },
@@ -2387,10 +2522,12 @@ sketcher = new Sketcher($("#skSvg"), {
     const f = feat(st.editSketch); if (!f) return;
     const ent = f.entities.find((x) => x.id === ref.e); if (!ent) return;
     const q = ent.pts[ref.k]; const old = [...q];
-    ent.pts[ref.k] = q[2] !== undefined && q[2] !== "" ? [at[0], at[1], q[2]] : [at[0], at[1]];
+    const moved = [...q]; moved[0] = at[0]; moved[1] = at[1]; if (moved.length === 3 && (moved[2] === undefined || moved[2] === "")) moved.length = 2;
+    ent.pts[ref.k] = moved;
     if (f.constraints?.length && !solveAndWrite(f, [{ ref, at }])) ent.pts[ref.k] = old;
   }, true),
   select: (id) => { st.skSel = id; renderProps(); },
+  say: (m) => toast(m),
   onTool: () => { $("#relBox")?.remove(); renderSketchTools(); if (st.editSketch) renderProps(); },
   onPick: (e, still) => relBox(e, still),
   onView: () => syncSketchView(),
@@ -2427,6 +2564,8 @@ document.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataT
 document.addEventListener("keydown", (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName);
   const mod = e.ctrlKey || e.metaKey;
+  // un calcul qui dure : Échap l'annule avant toute autre chose
+  if (e.key === "Escape" && st.building && Date.now() - buildStart > 1200 && !isAsm()) { e.preventDefault(); e.stopPropagation(); cancelBuild(); return; }
   if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); extras.palette(); return; }
   if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { if (!typing) { e.preventDefault(); undo(); } return; }
   if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { if (!typing) { e.preventDefault(); redo(); } return; }
@@ -2444,7 +2583,9 @@ document.addEventListener("keydown", (e) => {
     if (document.activeElement.classList.contains("bad")) return;
     e.preventDefault(); document.activeElement.blur(); validateFeature(); return;
   }
-  if (typing) return;
+  // Échap dans un champ des réglages : le champ est lâché, puis Échap agit comme ailleurs (annuler l'étape)
+  if (typing && e.key === "Escape" && document.activeElement.closest("#props") && !isAsm()) { document.activeElement.blur(); if (st.editSketch) return; }
+  else if (typing) return;
   if (e.key === "Escape" && $("#menu")) { closeMenu(); return; }
   if (e.key === "Escape" && $("#shapes")) { closeShapes(); return; }
   if (e.key === "Escape") {
@@ -2502,5 +2643,5 @@ typoTree(document.body);
 startWorker();
 extras.openFromHash();
 window.addEventListener("hashchange", () => extras.openFromHash());
-window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, openSketch, exampleDoc, emptyAsm, library, addToLibrary, asmUI, showWelcome: () => welcome(true) };
+window.gabarit = { get doc() { return doc; }, st, viewer, sketcher, loadDoc, openSketch, exampleDoc, emptyAsm, library, addToLibrary, asmUI, showWelcome: () => welcome(true), rebuild: () => requestBuild(0), get history() { return { n: hist.length, i: hidx }; } };
 if ("launchQueue" in window) window.launchQueue.setConsumer(async (p) => { for (const fh of p.files || []) openFile(await fh.getFile()); });

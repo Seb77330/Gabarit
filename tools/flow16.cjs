@@ -1,4 +1,5 @@
 // v0.9.2 : ouvrir un fichier 3MF (format Bambu Studio) puis le modifier.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -17,7 +18,7 @@ const { chromium } = require("playwright");
   ok(Math.abs(m.v - 12000) < 1, "volume du 3MF importé = 12 000 mm³");
   ok(Math.abs(m.bb[0][0] + 20) < 1e-3 && Math.abs(m.bb[1][1] - 15) < 1e-3 && Math.abs(m.bb[0][2]) < 1e-3, "pièce recentrée, posée sur z = 0");
   ok(m.name === "support", "nom de la pièce = nom du fichier");
-  await p.screenshot({ path: "/tmp/claude-0/shots/93-3mf.png" });
+  await p.screenshot({ path: TMP + "/shots/93-3mf.png" });
   // on la modifie : un cylindre extrudé sur le dessus, puis un trou
   await p.evaluate(() => {
     const d = JSON.parse(JSON.stringify(window.gabarit.doc));
@@ -45,7 +46,7 @@ const { chromium } = require("playwright");
   ok(!Object.keys(m2.err).length && m2.v < want - Math.PI * 6.25 * 10 + 60 && m2.v > want - Math.PI * 6.25 * 10 + 5, "forme prête sur un fichier importé : trou percé et prénom en relief");
   await p.evaluate(() => window.gabarit.viewer.fit([1, -1.3, 0.9]));
   await p.waitForTimeout(400);
-  await p.screenshot({ path: "/tmp/claude-0/shots/94-3mf-modifie.png" });
+  await p.screenshot({ path: TMP + "/shots/94-3mf-modifie.png" });
   // fichier plus détaillé (maillage courbe)
   const t0 = Date.now();
   await p.setInputFiles("#fileIn", "tools/fixtures/boule.3mf");

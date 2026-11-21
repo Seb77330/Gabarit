@@ -1,4 +1,5 @@
 // v1.1 : modèles de départ, et réglages en mots simples dans le mode Simple.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -23,7 +24,7 @@ const { chromium } = require("playwright");
       const v2 = await G(() => window.gabarit.st.mesh.volume);
       ok(Math.abs(v2 - r.vol) > 20 && !Object.keys(await G(() => window.gabarit.st.errors)).length, "porte-clés : le prénom se change dans le panneau, la pièce suit");
       await p.keyboard.press("Enter"); await p.waitForTimeout(300);
-      await p.screenshot({ path: "/tmp/claude-0/shots/v11-porte-cles.png" });
+      await p.screenshot({ path: TMP + "/shots/v11-porte-cles.png" });
     }
     await p.reload(); await p.waitForTimeout(700);
   }
@@ -57,11 +58,11 @@ const { chromium } = require("playwright");
   await p.setViewportSize({ width: 1280, height: 720 }); await p.waitForTimeout(400);
   const fit = await G(() => { const t = document.querySelector("#tools"); return [t.scrollWidth, t.clientWidth, [...t.querySelectorAll(".tbtn")].every((b) => b.getBoundingClientRect().right <= window.innerWidth + 0.5)]; });
   ok(fit[2] && fit[0] <= fit[1] + 1, "barre Simple (15 outils) : tout tient à 1280 px de large (" + fit.join(" ; ") + ")");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v11-simple-1280.png" });
+  await p.screenshot({ path: TMP + "/shots/v11-simple-1280.png" });
   await p.click("#modeSw [data-mode=expert]"); await p.waitForTimeout(400);
   const fit2 = await G(() => { const t = document.querySelector("#tools"); return [t.scrollWidth, t.clientWidth, [...t.querySelectorAll(".tbtn")].every((b) => b.getBoundingClientRect().right <= window.innerWidth + 0.5), t.querySelectorAll(".tbtn").length]; });
   ok(fit2[3] === 24 && (fit2[2] || fit2[0] > fit2[1]), "barre Expert (24 outils) à 1280 px : tout tient, ou la barre défile (" + fit2.join(" ; ") + ")");
-  await p.screenshot({ path: "/tmp/claude-0/shots/v11-expert-1280.png" });
+  await p.screenshot({ path: TMP + "/shots/v11-expert-1280.png" });
   console.log("erreurs", logs);
   ok(!logs.length, "aucune erreur dans la console");
   console.log(fails ? "FLOW23 ÉCHEC" : "FLOW23 OK");

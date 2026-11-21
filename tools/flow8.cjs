@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -26,7 +27,7 @@ const { chromium } = require("playwright");
   await p.click("#props .ents >> text=Courbe");
   await p.click("#props >> text=Symétrie gauche-droite");
   console.log("after mirror", JSON.stringify((await sk()).at(-1)));
-  await p.screenshot({ path: "/tmp/claude-0/shots/54-sketch-new.png" });
+  await p.screenshot({ path: TMP + "/shots/54-sketch-new.png" });
   // DXF depuis l'esquisse
   await p.click("[data-act=more]");
   const [dl] = await Promise.all([p.waitForEvent("download"), p.click("#dlg >> text=Enregistrer le DXF")]);
@@ -45,7 +46,7 @@ const { chromium } = require("playwright");
     const [d2] = await Promise.all([p.waitForEvent("download", { timeout: 60000 }), p.click(`#dlg .planes button >> nth=${k === "3mf" ? 1 : 2}`)]);
     const buf = require("fs").readFileSync(await d2.path());
     console.log(k, d2.suggestedFilename(), buf.length, buf.slice(0, 4).toString("latin1"));
-    if (k === "3mf") require("fs").writeFileSync("/tmp/claude-0/test.3mf", buf);
+    if (k === "3mf") require("fs").writeFileSync(TMP + "/test.3mf", buf);
   }
   // filetage via clic réel sur un cylindre
   await p.evaluate(() => window.gabarit.loadDoc({ version: 1, name: "Vis", material: "acier", params: [], features: [
@@ -64,7 +65,7 @@ const { chromium } = require("playwright");
   await p.waitForTimeout(500);
   await p.waitForFunction(() => !window.gabarit.st.building, null, { timeout: 120000 });
   console.log("thread", picked, await G(() => { const f = window.gabarit.doc.features[2]; return [f.kind, f.pitch, !!f.face, window.gabarit.st.errors, Math.round(window.gabarit.st.mesh.volume)]; }));
-  await p.screenshot({ path: "/tmp/claude-0/shots/55-thread-ui.png" });
+  await p.screenshot({ path: TMP + "/shots/55-thread-ui.png" });
   console.log("LOGS", logs.join("\n"));
   await b.close();
 })();

@@ -45,6 +45,7 @@ export const ICONS = {
   rectc: s('<rect x="4" y="6" width="16" height="12" rx="1"/><path d="M10.5 12h3M12 10.5v3"/>'),
   rect3: s('<path d="M3 15l12-9 5 6.5-12 9z"/><circle cx="3" cy="15" r="1.2" fill="currentColor"/><circle cx="15" cy="6" r="1.2" fill="currentColor"/><circle cx="20" cy="12.5" r="1.2" fill="currentColor"/>'),
   circle3: s('<circle cx="12" cy="12" r="8"/><circle cx="4.5" cy="9.5" r="1.4" fill="currentColor"/><circle cx="17" cy="5.8" r="1.4" fill="currentColor"/><circle cx="15" cy="19.4" r="1.4" fill="currentColor"/>'),
+  trim: s('<path d="M4 6l8 8"/><path d="M12 14l8 6" stroke-dasharray="2.5 2.5"/><path d="M20 4L8 20"/><circle cx="12" cy="14" r="1.5" fill="currentColor"/>'),
   convert: s('<path d="M4 20V8l8-4 8 4v12" stroke-dasharray="3 2"/><path d="M8 20v-8h8v8"/>'),
   path: s('<path d="M4 18c3-9 7 2 10-6 1-3 3-5 6-6"/><circle cx="4" cy="18" r="1.3" fill="currentColor"/><circle cx="20" cy="6" r="1.3" fill="currentColor"/>'),
   done: s('<path d="M5 12l5 5 9-10"/>'),

@@ -1,5 +1,6 @@
 // Éditeur d'esquisse 2D (SVG) : tracé, accroche à la grille, cotes, déplacement.
-import { evalEntity, outline, segPts, ENT_FIELDS, hasPts, isOpen } from "./geo.js";
+import { evalEntity, outline, segPts, ENT_FIELDS, hasPts, isOpen, inPoly, cornerFillet } from "./geo.js";
+import { arrange, splitAll, prims, paramOn, primPt, primNear, insidePoint, TOL } from "./regions.js";
 import { varsMap } from "./expr.js";
 import { solveSketch, C_GLYPH } from "./constraints.js";
 
@@ -149,9 +150,42 @@ export class Sketcher {
       if (Math.abs(q[1] - from[1]) * this.zoom < 6) q[1] = from[1];
       if (Math.abs(q[0] - from[0]) * this.zoom < 6) q[0] = from[0];
     }
+    const c = this.curveSnap(p, q, 7 / this.zoom);
+    if (c) return { p: [num(c[0]), num(c[1])], key: true, on: true };
     return { p: [num(q[0]), num(q[1])] };
   }
-  setTool(t) { this.tool = t; this.draft = null; if (t !== "select") this.subs = []; this.render(); this.api.onTool?.(t); }
+  // Accroche sur un trait déjà dessiné : le point visé se pose dessus (de préférence là où le trait croise la grille),
+  // pour qu'un trait qui doit toucher un autre le touche vraiment et ferme une zone.
+  curveSnap(p, q, tol) {
+    if (this.tool === "select" && this.drag?.kind !== "vertex") return null;
+    const skip = this.drag?.kind === "vertex" ? this.drag.id : null;
+    const ev = this.evaluated();
+    if (this._pKey !== this._evKey) {
+      this._p = [];
+      for (const o of ev) { if (o.type === "point" || o.type === "text") continue; try { for (const pr of prims(o)) { pr.id = o.id; this._p.push(pr); } } catch { /* entité invalide */ } }
+      this._pKey = this._evKey;
+    }
+    let best = null, bd = tol;
+    for (const pr of this._p) {
+      if (pr.id === skip) continue;
+      const [d, u] = primNear(pr, p); if (d > tol) continue;
+      const cands = [];
+      if (paramOn(pr, q, 1e-9) !== null) cands.push(q);
+      if (pr.t === "L") {
+        const dx = pr.b[0] - pr.a[0], dy = pr.b[1] - pr.a[1];
+        if (Math.abs(dx) > 1e-12) { const t = (q[0] - pr.a[0]) / dx; if (t >= 0 && t <= 1) cands.push([q[0], pr.a[1] + t * dy]); }
+        if (Math.abs(dy) > 1e-12) { const t = (q[1] - pr.a[1]) / dy; if (t >= 0 && t <= 1) cands.push([pr.a[0] + t * dx, q[1]]); }
+      } else {
+        const hx = pr.r * pr.r - (q[0] - pr.c[0]) ** 2, hy = pr.r * pr.r - (q[1] - pr.c[1]) ** 2;
+        for (const sg of [1, -1]) { if (hx >= 0) { const c = [q[0], pr.c[1] + sg * Math.sqrt(hx)]; if (paramOn(pr, c, 1e-7) !== null) cands.push(c); } if (hy >= 0) { const c = [pr.c[0] + sg * Math.sqrt(hy), q[1]]; if (paramOn(pr, c, 1e-7) !== null) cands.push(c); } }
+      }
+      for (const c of cands) { const dd = Math.hypot(c[0] - p[0], c[1] - p[1]); if (dd < bd) { bd = dd; best = c; } }
+      const near = primPt(pr, u), dn = Math.hypot(near[0] - p[0], near[1] - p[1]) + tol * 0.35; // à défaut : le point du trait le plus proche
+      if (dn < bd) { bd = dn; best = near; }
+    }
+    return best;
+  }
+  setTool(t) { this.tool = t; this.draft = null; this.hoverTrim = null; this.hoverCorner = null; if (t !== "select") this.subs = []; this.render(); this.api.onTool?.(t); }
   hitEntity(e) {
     const p = this.toW(e); const tol = 6 / this.zoom; let best = null, bd = tol;
     for (const o of this.evaluated()) {
@@ -215,6 +249,8 @@ export class Sketcher {
       this.render(); return;
     }
     if (t === "convert") { const ed = this.edgeAt(e); if (ed) this.convertEdge(ed); this.hoverEdge = null; this.render(); return; }
+    if (t === "trim") { const hit = this.trimPick(e); if (hit) this.applyTrim(hit); this.hoverTrim = null; this.render(); return; }
+    if (t === "fillet") { const c = this.cornerPick(e); if (c) this.applyFillet(c); else this.api.say?.("Clique sur un coin entre deux traits droits. Si les traits se croisent ou dépassent, coupe d’abord ce qui dépasse avec Ajuster."); this.hoverCorner = null; this.render(); return; }
     const { p } = this.snap(e, this.draft?.pts?.at(-1) || this.draft?.a);
     if (this.draft?.click) { this.draft.b = p; this.makeFromDraft(); return; }
     if (MULTI[t]) {
@@ -243,6 +279,8 @@ export class Sketcher {
       this.render(); return;
     }
     if (this.tool === "convert" && !this.drag) { this.hoverEdge = this.edgeAt(e); this.cursor = null; this.render(); return; }
+    if (this.tool === "trim" && !this.drag) { this.hoverTrim = this.trimPick(e); this.cursor = null; this.render(); return; }
+    if (this.tool === "fillet" && !this.drag) { this.hoverCorner = this.cornerPick(e); this.cursor = null; this.render(); return; }
     const sn = this.snap(e, this.draft?.pts?.at(-1) || this.draft?.a);
     this.cursor = sn;
     if (this.drag?.kind === "move") {
@@ -255,7 +293,7 @@ export class Sketcher {
         const sh = (k, d) => { const v = Number(String(o[k]).replace(",", ".")); if (isFinite(v)) ent[k] = num(v + d); };
         if ("cx" in o) { sh("cx", dx); sh("cy", dy); }
         if (o.type === "slot") { sh("x1", dx); sh("y1", dy); sh("x2", dx); sh("y2", dy); }
-        if (hasPts(o.type)) ent.pts = o.pts.map((q) => { const x = Number(q[0]), y = Number(q[1]); const r = [isFinite(x) ? num(x + dx) : q[0], isFinite(y) ? num(y + dy) : q[1]]; if (q[2]) r.push(q[2]); return r; });
+        if (hasPts(o.type)) ent.pts = o.pts.map((q) => { const x = Number(q[0]), y = Number(q[1]); const r = [...q]; if (isFinite(x)) r[0] = num(x + dx); if (isFinite(y)) r[1] = num(y + dy); if (r.length === 3 && !r[2]) r.length = 2; return r; });
       }, true);
       return;
     }
@@ -268,7 +306,7 @@ export class Sketcher {
       let sg = ((p[0] - (a[0] + b[0]) / 2) * -dy + (p[1] - (a[1] + b[1]) / 2) * dx) / L;
       if (Math.abs(sg) * this.zoom < 5) sg = 0;
       sg = Math.max(-L / 2, Math.min(L / 2, e.shiftKey ? sg : Math.round(sg / (this.snapStep / 2)) * (this.snapStep / 2)));
-      this.api.update((sk) => { const ent = sk.entities.find((x) => x.id === id); if (!ent) return; const q = ent.pts[i]; ent.pts[i] = [q[0], q[1], num(sg)]; if (!sg) ent.pts[i] = [q[0], q[1]]; }, true);
+      this.api.update((sk) => { const ent = sk.entities.find((x) => x.id === id); if (!ent) return; const q = [...ent.pts[i]]; q[2] = num(sg); if (!sg && q.length === 3) q.length = 2; ent.pts[i] = q; }, true);
       return;
     }
     if (this.drag?.kind === "vertex") {
@@ -405,6 +443,11 @@ export class Sketcher {
     }
     // entités
     const ev = this.evaluated();
+    const zn = this.zones(ev);
+    for (const f of zn.fills) {
+      const d = [f.pts, ...f.holePts].map((L) => "M" + L.map((q) => { const r = this.toS(q); return r[0].toFixed(1) + " " + r[1].toFixed(1); }).join("L") + "Z").join("");
+      el("path", { d, class: "zone", "fill-rule": "evenodd" }, svg);
+    }
     for (const ent of ev) {
       const cls = "ent" + (ent.id === this.sel ? " sel" : "") + (ent.construction ? " constr" : "");
       if (ent.type === "point") { const p = this.toS([ent.cx, ent.cy]); el("circle", { cx: p[0], cy: p[1], r: 4, class: cls + " pt" }, svg); continue; }
@@ -422,6 +465,7 @@ export class Sketcher {
         for (const q of ent.pts) { const p = this.toS(q); el("rect", { x: p[0] - 4, y: p[1] - 4, width: 8, height: 8, class: "handle" }, svg); }
       }
     }
+    for (const q of zn.ends) { const r = this.toS(q); el("circle", { cx: r[0], cy: r[1], r: 6.5, class: "free-end" }, svg); }
     this.drawSubs(ev);
     this.drawConstraints(ev);
     // brouillon
@@ -457,11 +501,177 @@ export class Sketcher {
       el("circle", { cx: p[0], cy: p[1], r: this.cursor.key ? 6 : 3, class: this.cursor.key ? "snap key" : "snap" }, svg);
       const t = el("text", { x: p[0] + 10, y: p[1] - 10, class: "coord" }, svg); t.textContent = `${fmt(this.cursor.p[0])} ; ${fmt(this.cursor.p[1])}`;
     }
+    if (this.tool === "trim" && this.hoverTrim) {
+      const q = this.hoverTrim.show.map((r) => this.toS(r));
+      el("path", { d: "M" + q.map((r) => r[0].toFixed(1) + " " + r[1].toFixed(1)).join("L"), class: "trim-hot" }, svg);
+    }
+    if (this.tool === "fillet" && this.hoverCorner) { const r = this.toS(this.hoverCorner.p); el("circle", { cx: r[0], cy: r[1], r: 9, class: "corner-hot" }, svg); }
     if (this.tool === "convert" && this.hoverEdge) {
       const q = this.hoverEdge.pts.map((r) => this.toS(r));
       el("path", { d: "M" + q.map((r) => r[0].toFixed(1) + " " + r[1].toFixed(1)).join("L"), class: "ref-hot" }, svg);
     }
     this.api.onView?.();
+  }
+  // Zones fermées par plusieurs traits (à colorer) et bouts de trait qui ne touchent rien (à signaler).
+  zones(ev) {
+    if (this._zKey === this._evKey && this._z) return this._z;
+    const list = ev.filter((o) => !o.construction && o.type !== "point" && o.type !== "text");
+    const z = { fills: [], ends: [] };
+    let n = 0; for (const o of list) n += o.pts ? o.pts.length * (o.type === "spline" ? 12 : 1) : o.type === "ellipse" ? 96 : 4;
+    if (n <= 2500 && list.some(isOpen)) {
+      try {
+        const ar = arrange(list); z.ends = ar.ends;
+        // les formes fermées ont déjà leur fond : on colore seulement les zones qui n'y sont pas
+        const closed = list.filter((o) => !isOpen(o)).map((o) => outline(o));
+        if (ar.faces.length <= 300) for (const f of ar.faces) { const c = insidePoint(f); if (c && !closed.some((L) => inPoly(c, L))) z.fills.push(f); }
+      } catch { /* dessin trop particulier : pas de couleur */ }
+    }
+    this._zKey = this._evKey; this._z = z; return z;
+  }
+  // ---- Outil Ajuster : retire le morceau de trait sous le pointeur, entre deux croisements ----
+  trimPick(e) {
+    const x = this.toW(e), tol = 9 / this.zoom;
+    const ev = this.evaluated().filter((o) => o.type !== "point" && o.type !== "text");
+    if (this._tKey !== this._evKey) { try { this._t = splitAll(ev); } catch { this._t = { P: [] }; } this._tKey = this._evKey; }
+    let best = null, bd = tol;
+    for (const pr of this._t.P) { const [d, u] = primNear(pr, x); if (d < bd) { bd = d; best = { pr, u }; } }
+    if (!best) return null;
+    const src = best.pr.src, o = ev[src], chain = this._t.P.filter((q) => q.src === src), n = chain.length, closed = !isOpen(o);
+    const g0 = best.pr.k + best.u;
+    let cuts = []; for (const q of chain) for (const c of q.cuts) cuts.push(q.k + c);
+    if (closed) cuts = cuts.map((g) => (g >= n - 1e-7 ? g - n : g));
+    cuts.sort((a, b) => a - b); cuts = cuts.filter((g, i) => i === 0 || g - cuts[i - 1] > 1e-7);
+    let lo = 0, hi = n, whole = false;
+    if (closed) {
+      if (cuts.length < 2) whole = true;
+      else { const below = cuts.filter((g) => g <= g0), above = cuts.filter((g) => g > g0); lo = below.length ? below.at(-1) : cuts.at(-1) - n; hi = above.length ? above[0] : cuts[0] + n; }
+    } else {
+      const below = cuts.filter((g) => g <= g0 && g > 1e-7), above = cuts.filter((g) => g > g0 && g < n - 1e-7);
+      lo = below.length ? below.at(-1) : 0; hi = above.length ? above[0] : n; whole = lo === 0 && hi === n;
+    }
+    const hit = { id: o.id, chain, n, closed, lo, hi, whole, approx: !!chain[0]?.approx };
+    hit.show = [];
+    for (const { pr, ua, ub } of this.trimPieces(hit, whole ? 0 : lo, whole ? n : hi)) { const k = pr.t === "A" ? Math.max(2, Math.ceil(Math.abs(pr.sw * (ub - ua)) / 0.12)) : 1; for (let i = 0; i <= k; i++) hit.show.push(primPt(pr, ua + (ub - ua) * i / k)); }
+    return hit;
+  }
+  trimPieces(hit, g1, g2) {
+    const out = [];
+    for (let i = Math.floor(g1 + 1e-9); i < g2 - 1e-9; i++) { const pr = hit.chain[((i % hit.n) + hit.n) % hit.n]; const ua = Math.max(0, g1 - i), ub = Math.min(1, g2 - i); if (ub - ua > 1e-9) out.push({ pr, ua, ub }); }
+    return out;
+  }
+  applyTrim(hit) {
+    const r9 = (v) => { const a = Math.round(v * 1000) / 1000; return Math.abs(a - v) < 1e-9 ? a : Math.round(v * 1e9) / 1e9; };
+    const toPts = (list) => {
+      const segs = [];
+      for (const { pr, ua, ub } of list) {
+        const a = ua === 0 ? pr.a : primPt(pr, ua), b = ub === 1 ? pr.b : primPt(pr, ub);
+        if (pr.t !== "A") { segs.push({ a, b }); continue; }
+        const sw = pr.sw * (ub - ua), l = segs.at(-1);
+        // deux morceaux d'un même arc se recollent en un seul
+        if (l && l.c && Math.hypot(l.c[0] - pr.c[0], l.c[1] - pr.c[1]) < 1e-7 && Math.abs(l.r - pr.r) < 1e-7 && Math.sign(l.sw) === Math.sign(sw) && Math.abs(l.sw + sw) < 2 * Math.PI - 0.05) { l.b = b; l.sw += sw; }
+        else segs.push({ a, b, c: pr.c, r: pr.r, sw });
+      }
+      if (!segs.length) return null;
+      const pts = segs.map((g) => { const q = [r9(g.a[0]), r9(g.a[1])]; if (g.c) q.push(r9(-Math.sign(g.sw) * g.r * (1 - Math.cos(Math.abs(g.sw) / 2)))); return q; });
+      const last = segs.at(-1).b; pts.push([r9(last[0]), r9(last[1])]);
+      return pts;
+    };
+    const raw = this.api.getSketch().entities.find((q) => q.id === hit.id); if (!raw) return;
+    const mk = (pts) => { const ent = { id: newId("e"), type: "path", pts }; if (raw.construction) ent.construction = true; return ent; };
+    const add = [];
+    if (!hit.whole) {
+      const ranges = hit.closed ? [[hit.hi, hit.lo + hit.n]] : [[0, hit.lo], [hit.hi, hit.n]];
+      for (const [g1, g2] of ranges) if (g2 - g1 > 1e-9) { const pts = toPts(this.trimPieces(hit, g1, g2)); if (pts) add.push(mk(pts)); }
+    }
+    let had = false;
+    this.api.update((sk) => {
+      const i = sk.entities.findIndex((q) => q.id === hit.id); if (i < 0) return;
+      sk.entities.splice(i, 1, ...add);
+      const keep = (sk.constraints || []).filter((c) => (c.refs || []).every((r) => r.e !== hit.id));
+      had = keep.length !== (sk.constraints || []).length; sk.constraints = keep;
+    });
+    this.sel = null; this.subs = []; this.api.select(null);
+    if (hit.approx && add.length) this.api.say?.("Cette courbe est devenue une suite de petits segments. Ctrl+Z pour revenir en arrière.");
+    else if (had) this.api.say?.("Ajusté. Les contraintes posées sur ce trait ont été retirées.");
+  }
+  // ---- Outil Congé : arrondit le coin cliqué (le rayon reste réglable sur le point) ----
+  cornerPick(e) {
+    const x = this.toW(e), tol = 12 / this.zoom; let best = null, bd = tol;
+    const see = (c) => { const d = Math.hypot(c.p[0] - x[0], c.p[1] - x[1]); if (d < bd) { bd = d; best = c; } };
+    for (const o of this.evaluated()) {
+      if (o.type === "poly") o.pts.forEach((q, i) => see({ kind: "pt", id: o.id, i, p: [q[0], q[1]] }));
+      else if (o.type === "path") o.pts.forEach((q, i) => see({ kind: i === 0 || i === o.pts.length - 1 ? "end" : "pt", id: o.id, i, p: [q[0], q[1]] }));
+      else if (o.type === "rect" || o.type === "polygon") outline(o.type === "rect" ? { ...o, r: 0 } : o).forEach((q, i) => see({ kind: "shape", id: o.id, i, p: q }));
+    }
+    return best;
+  }
+  applyFillet(c) {
+    const R = Math.max(0, Number(this.filletR ?? 2) || 0), say = (m) => this.api.say?.(m);
+    const sk = this.api.getSketch(), ev = this.evaluated();
+    const raw = sk.entities.find((q) => q.id === c.id), o = ev.find((q) => q.id === c.id); if (!raw || !o) return;
+    const plain = (v) => typeof v === "number" || /^\s*-?\d*[.,]?\d+\s*$/.test(String(v));
+    const r9 = (v) => { const a = Math.round(v * 1000) / 1000; return Math.abs(a - v) < 1e-9 ? a : Math.round(v * 1e9) / 1e9; };
+    const dropCons = (s, ids) => { s.constraints = (s.constraints || []).filter((k) => (k.refs || []).every((r) => !ids.includes(r.e))); };
+    // le coin tient-il ? P = points évalués du contour, i = le coin
+    const fits = (P, i, closed) => {
+      const n = P.length, a = P[(i - 1 + n) % n], p = P[i], b = P[(i + 1) % n];
+      if (a[2] || p[2]) { say("Ce coin touche un côté courbe : le congé se pose entre deux traits droits."); return false; }
+      if (!R) return true;
+      const f = cornerFillet(p, a, b, R); if (!f) { say("Ces deux traits sont dans le prolongement l’un de l’autre : il n’y a pas de coin à arrondir."); return false; }
+      const tOf = (j) => { if (!closed && (j <= 0 || j >= n - 1)) return 0; const q = P[j]; if (!(q[3] > 0)) return 0; const g = cornerFillet(q, P[(j - 1 + n) % n], P[(j + 1) % n], q[3]); return g ? g.t : 0; };
+      const room = Math.min(f.l1 - tOf((i - 1 + n) % n), f.l2 - tOf((i + 1) % n));
+      if (f.t > room + 1e-9) { say(`Rayon trop grand pour ce coin : ${fmt(Math.floor(R * room / f.t * 100 + 1e-6) / 100)} mm au maximum ici.`); return false; }
+      return true;
+    };
+    const setR = (pt) => { const q = [pt[0], pt[1], pt[2] === undefined || pt[2] === null ? 0 : pt[2]]; if (R) q.push(R); else if (!q[2]) q.length = 2; return q; };
+    if (c.kind === "pt") {
+      if (!fits(o.pts, c.i, o.type === "poly")) return;
+      this.api.update((s) => { const ent = s.entities.find((q) => q.id === c.id); if (ent) ent.pts[c.i] = setR(ent.pts[c.i]); });
+    } else if (c.kind === "shape") {
+      // rectangle ou polygone : il devient un contour à points, dont on arrondit un coin
+      if (o.type === "rect" && o.r > 0) { say("Ce rectangle a déjà ses quatre coins arrondis (réglage « Rayon des angles »)."); return; }
+      if (!["cx", "cy", "w", "h", "d", "a", "n"].every((k) => raw[k] === undefined || plain(raw[k]))) { say(o.type === "rect" ? "Ce rectangle est piloté par des formules : règle plutôt son « Rayon des angles » (les quatre coins)." : "Ce polygone est piloté par des formules : trace plutôt le contour avec l’outil Ligne."); return; }
+      const P = outline(o).map((q) => [r9(q[0]), r9(q[1])]);
+      if (!fits(P, c.i, true)) return;
+      this.api.update((s) => {
+        const ent = s.entities.find((q) => q.id === c.id); if (!ent) return;
+        dropCons(s, [c.id]);
+        for (const k of ["cx", "cy", "w", "h", "d", "a", "n"]) delete ent[k];
+        ent.type = "poly"; ent.r = 0; ent.pts = P.map((q, i) => (i === c.i ? setR(q) : q));
+        for (let i = 0; i < P.length; i++) { // côtés horizontaux et verticaux : ils le restent
+          const a = P[i], b = P[(i + 1) % P.length];
+          if (Math.abs(a[1] - b[1]) < 1e-9) s.constraints.push({ id: newId("c"), type: "horizontal", refs: [{ e: ent.id, k: i }] });
+          else if (Math.abs(a[0] - b[0]) < 1e-9) s.constraints.push({ id: newId("c"), type: "vertical", refs: [{ e: ent.id, k: i }] });
+        }
+      });
+    } else {
+      // bout d'un trait : il faut un autre bout au même endroit (un autre trait, ou l'autre bout du même)
+      const n = o.pts.length, same = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < TOL * 10;
+      // flèches : après retournement, chaque côté garde sa courbure (signe inversé), portée par son nouveau point de départ
+      const rev = (P) => { const L = P.slice().reverse().map((q) => [q[0], q[1], 0, q[3] || 0]); for (let j = 0; j + 1 < P.length; j++) L[P.length - 2 - j][2] = -(P[j][2] || 0); return L; };
+      const tidy = (P) => P.map((q) => { const r = [r9(q[0]), r9(q[1])]; if (q[2] || q[3] > 0) r.push(r9(q[2] || 0)); if (q[3] > 0) r.push(q[3]); return r; });
+      const here = o.pts[c.i];
+      if (n >= 3 && same(o.pts[0], o.pts[n - 1])) {
+        // le trait revient à son départ : il devient un contour fermé
+        const P = o.pts.slice(0, n - 1).map((q) => [...q]);
+        if (!fits(P, 0, true)) return;
+        this.api.update((s) => { const ent = s.entities.find((q) => q.id === c.id); if (!ent) return; dropCons(s, [c.id]); ent.type = "poly"; ent.r = 0; ent.pts = tidy(P).map((q, i) => (i === 0 ? setR(q) : q)); });
+      } else {
+        const other = ev.find((q) => q.id !== o.id && q.type === "path" && !!q.construction === !!o.construction && (same(q.pts[0], here) || same(q.pts.at(-1), here)));
+        if (!other) { say("Ce bout de trait ne touche aucun autre trait : il n’y a pas de coin à arrondir ici."); return; }
+        const A = c.i === 0 ? rev(o.pts) : o.pts.map((q) => [...q]);
+        const B = same(other.pts[0], here) ? other.pts.map((q) => [...q]) : rev(other.pts);
+        let P = A.concat(B.slice(1)); const at = A.length - 1; P[at] = [P[at][0], P[at][1], B[0][2] || 0];
+        const closed = P.length >= 4 && same(P[0], P.at(-1)); if (closed) P = P.slice(0, -1);
+        if (!fits(P, at, closed)) return;
+        this.api.update((s) => {
+          const ent = s.entities.find((q) => q.id === c.id); if (!ent) return;
+          dropCons(s, [c.id, other.id]); s.entities = s.entities.filter((q) => q.id !== other.id);
+          ent.type = closed ? "poly" : "path"; if (closed) ent.r = 0; ent.pts = tidy(P).map((q, i) => (i === at ? setR(q) : q));
+        });
+      }
+    }
+    this.sel = c.id; this.api.select(c.id);
   }
   // Arête de la pièce (projetée) la plus proche du pointeur.
   edgeAt(e) {

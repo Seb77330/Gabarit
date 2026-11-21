@@ -3,3 +3,5 @@ dist/
 dist-standalone/
 test-node.mjs
 t2.mjs
+essais-tmp/
+essais-resultat.txt

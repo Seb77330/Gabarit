@@ -1,4 +1,5 @@
 // v0.9.4 : onglets de pièces (nouvel onglet, changer, fermer) et bouton Mettre à jour.
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -27,7 +28,7 @@ const { chromium } = require("playwright");
   await p.click("#tabs .tab.on .x"); await p.waitForTimeout(400);
   ok((await names()).length === 1 && await p.evaluate(() => window.gabarit.doc.features.length === 0), "fermer le dernier : pièce vide");
   ok(await p.locator(".status .upd").isVisible(), "bouton Mettre à jour en bas : " + await p.locator(".status .upd").innerText());
-  await p.screenshot({ path: "/tmp/claude-0/shots/99-onglets.png" });
+  await p.screenshot({ path: TMP + "/shots/99-onglets.png" });
   console.log("errors", logs.length ? logs : "none");
   await b.close();
 })();

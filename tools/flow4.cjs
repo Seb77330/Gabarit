@@ -1,3 +1,4 @@
+const TMP = process.env.GABARIT_TMP || "/tmp/claude-0"; // dossier des captures et des fichiers d'essai
 const { chromium } = require("playwright");
 (async () => {
   const b = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
@@ -18,7 +19,7 @@ const { chromium } = require("playwright");
   const mb = await mids[0].boundingBox();
   await p.mouse.move(mb.x + mb.width / 2, mb.y + mb.height / 2); await p.mouse.down(); await p.mouse.move(mb.x + 4, mb.y - 40, { steps: 6 }); await p.mouse.up();
   console.log("pts", JSON.stringify(await G(() => window.gabarit.doc.features[0].entities[0].pts)));
-  await p.screenshot({ path: "/tmp/claude-0/shots/20-arc.png" });
+  await p.screenshot({ path: TMP + "/shots/20-arc.png" });
   await p.click("#skTools button[title=Entrée]");
   await p.click(".tbtn[data-tool=extrude]"); await p.waitForFunction(() => window.gabarit.st.mesh, null, { timeout: 30000 }); await wait();
   console.log("extrude", JSON.stringify(await G(() => [window.gabarit.st.errors, window.gabarit.st.mesh.bb])));
@@ -45,7 +46,7 @@ const { chromium } = require("playwright");
   console.log("draft", JSON.stringify(await G(() => [window.gabarit.doc.features.at(-1).faces, window.gabarit.st.errors])));
   // import du STEP exporté plus tôt
   const [fc] = await Promise.all([p.waitForEvent("filechooser"), p.click(".tbtn[data-tool=import]")]);
-  await fc.setFiles("/tmp/claude-0/shots/test.step"); await p.waitForTimeout(500); await wait();
+  await fc.setFiles(TMP + "/shots/test.step"); await p.waitForTimeout(500); await wait();
   await p.fill("#props .field input >> nth=1", "70"); await p.press("#props .field input >> nth=1", "Tab"); await wait();
   console.log("import", JSON.stringify(await G(() => [window.gabarit.st.errors, window.gabarit.st.mesh.bb])));
   // répétition de fonctions : perçage répété
@@ -53,16 +54,16 @@ const { chromium } = require("playwright");
   await p.click(".cogchk input"); await p.waitForTimeout(300);
   await p.click(".tbtn[data-tool=section]"); await p.waitForTimeout(300);
   await p.click("text=Recadrer"); await p.waitForTimeout(500);
-  await p.screenshot({ path: "/tmp/claude-0/shots/21-section.png" });
+  await p.screenshot({ path: TMP + "/shots/21-section.png" });
   await p.click("#secbar >> text=Fermer");
   await p.click(".tbtn[data-tool=measure]");
   const c1 = await G(() => { const v = window.gabarit.viewer; const V = v.camera.position.constructor; const out = []; for (const P0 of [[-29.9, -11.9, 9.9], [29.9, -11.9, 9.9]]) { const P = new V(...P0); P.project(v.camera); const r = v.renderer.domElement.getBoundingClientRect(); out.push([r.left + (P.x + 1) / 2 * r.width, r.top + (1 - P.y) / 2 * r.height]); } return out; });
   for (const c of c1) { await p.mouse.move(c[0], c[1]); await p.mouse.click(c[0], c[1]); await p.waitForTimeout(200); }
   console.log("measure", await p.locator("#banner span").textContent());
-  await p.screenshot({ path: "/tmp/claude-0/shots/22-measure.png" });
+  await p.screenshot({ path: TMP + "/shots/22-measure.png" });
   await p.click("#banner >> text=Fermer");
   // mise en plan
   await p.click(".tbtn[data-tool=drawing]"); await p.waitForSelector(".sheet svg", { timeout: 60000 }); await p.waitForTimeout(500);
-  await p.screenshot({ path: "/tmp/claude-0/shots/23-drawing.png" });
+  await p.screenshot({ path: TMP + "/shots/23-drawing.png" });
   console.log(logs.join("\n") || "no errors"); await b.close();
 })();

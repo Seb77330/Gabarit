@@ -7,7 +7,8 @@ import { readStl, writeStl, stretchZone, bakeTris } from "./mesh3mf.js";
 import FONT from "./texte.ttf";
 let fontReady = null;
 const ensureFont = () => (fontReady ||= R.loadFont(FONT.buffer.slice(FONT.byteOffset, FONT.byteOffset + FONT.byteLength), "gabarit"));
-import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, inPoly, isOpen, toWorld, cross, dot, norm, bezierSegs, outline } from "./geo.js";
+import { resolvePlane, refPlanes, evalEntity, checkEntity, nestProfiles, inPoly, isOpen, toWorld, cross, dot, norm, bezierSegs, outline, roundCorners } from "./geo.js";
+import { arrange, faceAt } from "./regions.js";
 
 let lastShape = null;
 
@@ -42,22 +43,26 @@ function entityDrawing(o) {
     if (o.a) d = d.rotate(o.a, [0, 0]);
     d = d.translate(o.cx, o.cy);
   } else if (o.type === "poly") {
-    let pen = R.draw(o.pts[0].slice(0, 2));
-    const n = o.pts.length;
+    // coins arrondis un par un (rayon porté par le point) : le contour est repris avec ses arcs
+    const own = o.pts.some((q) => q[3] > 0), P = own ? roundCorners(o.pts, true, o.r || 0) : o.pts;
+    let pen = R.draw(P[0].slice(0, 2));
+    const n = P.length;
     for (let i = 1; i <= n; i++) {
-      const a = o.pts[i - 1], b = o.pts[i % n];
+      const a = P[i - 1], b = P[i % n];
       if (i === n) { if (a[2]) pen = pen.sagittaArcTo(b.slice(0, 2), a[2]); break; }
       pen = a[2] ? pen.sagittaArcTo(b.slice(0, 2), a[2]) : pen.lineTo(b.slice(0, 2));
     }
     d = pen.close();
-    if (o.r > 0) d = d.fillet(o.r);
+    if (o.r > 0 && !own) d = d.fillet(o.r);
   }
   return d;
 }
 
 // Dessin d'un contour à points (contour libre, chemin, courbe), ouvert ou fermé.
 function wireDrawing(o) {
-  const pts = o.pts, n = pts.length, closed = o.type === "poly" || (o.type === "spline" && o.closed);
+  const closed = o.type === "poly" || (o.type === "spline" && o.closed);
+  const own = o.type !== "spline" && o.pts.some((q) => q[3] > 0);
+  const pts = own ? roundCorners(o.pts, closed, o.type === "poly" ? o.r || 0 : 0) : o.pts, n = pts.length;
   let pen = R.draw(pts[0].slice(0, 2));
   if (o.type === "spline") {
     const segs = bezierSegs(pts, closed);
@@ -70,7 +75,7 @@ function wireDrawing(o) {
     pen = a[2] ? pen.sagittaArcTo(b.slice(0, 2), a[2]) : pen.lineTo(b.slice(0, 2));
   }
   let d = closed ? pen.close() : pen.done();
-  if (o.type === "poly" && o.r > 0) d = d.fillet(o.r);
+  if (o.type === "poly" && o.r > 0 && !own) d = d.fillet(o.r);
   return d;
 }
 
@@ -182,8 +187,34 @@ function threadCut(f, vars, shape) {
 function closedItems(ents) {
   return ents.filter((o) => o.type !== "point" && !isOpen(o) && !o.construction).map((o) => ({ o, pts: outline(o) }));
 }
+// Dès qu'un trait ouvert (ligne, chemin, courbe ouverte) est dans l'esquisse, les zones sont cherchées
+// trait par trait : plusieurs traits peuvent fermer un contour, et un trait peut couper un contour en deux.
+const hasOpen = (ents) => ents.some((o) => !o.construction && isOpen(o));
+const zoneCache = new WeakMap();
+function zonesOf(ents) {
+  let z = zoneCache.get(ents);
+  if (!z) { const list = ents.filter((o) => !o.construction && o.type !== "point" && o.type !== "text"); z = { list, ...arrange(list) }; zoneCache.set(ents, z); }
+  return z;
+}
+function loopDrawing(loop) {
+  let pen = R.draw(loop[0].a);
+  for (const sg of loop) pen = sg.arc ? pen.threePointsArcTo(sg.b, sg.arc.mid) : pen.lineTo(sg.b);
+  return pen.close();
+}
+function zoneDrawing(z, f) {
+  let d = f.whole >= 0 ? entityDrawing(z.list[f.whole]) : loopDrawing(f.loop);
+  f.holes.forEach((hl, i) => { d = d.cut(f.holeWhole[i] >= 0 ? entityDrawing(z.list[f.holeWhole[i]]) : loopDrawing(hl)); });
+  return d;
+}
+const textItems = (ents) => ents.filter((o) => o.type === "text" && !o.construction).map((o) => ({ o, pts: outline(o) }));
 // Zone qui contient le point p : intersection des contours qui le contiennent, moins les autres.
-function regionAt(items, p) {
+function regionAt(items, p, ents) {
+  if (ents && hasOpen(ents)) {
+    const z = zonesOf(ents), f = faceAt(z.faces, p); if (!f) return null;
+    let acc = zoneDrawing(z, f);
+    for (const it of textItems(ents)) { const d = entityDrawing(it.o); acc = inPoly(p, it.pts) ? acc.intersect(d) : acc.cut(d); if (!acc.innerShape) return null; }
+    return acc;
+  }
   let acc = null;
   for (const it of items) if (inPoly(p, it.pts)) { const d = entityDrawing(it.o); acc = acc ? acc.intersect(d) : d; if (!acc.innerShape) return null; }
   if (!acc) return null;
@@ -192,7 +223,12 @@ function regionAt(items, p) {
 }
 // Toutes les zones délimitées par les contours (pour les cliquer en 3D).
 function allRegions(ents) {
-  const items = closedItems(ents); let regs = []; let union = null;
+  let regs = [], union = null, items = closedItems(ents);
+  if (hasOpen(ents)) {
+    const z = zonesOf(ents); regs = z.faces.map((f) => zoneDrawing(z, f));
+    items = textItems(ents);
+    if (items.length) for (const r of regs) union = union ? union.fuse(r) : r;
+  }
   for (const it of items) {
     const D = entityDrawing(it.o); const next = [];
     for (const r of regs) {
@@ -207,15 +243,23 @@ function allRegions(ents) {
 function sketchDrawing(ents, regions) {
   if (regions?.length) {
     const items = closedItems(ents); let acc = null;
-    for (const p of regions) { const r = regionAt(items, p.map(Number)); if (r) acc = acc ? acc.fuse(r) : r; }
+    for (const p of regions) { const r = regionAt(items, p.map(Number), ents); if (r) acc = acc ? acc.fuse(r) : r; }
     if (!acc) throw new Error("Aucune zone choisie : clique à l’intérieur d’un contour");
     return acc;
   }
-  const items = nestProfiles(ents);
+  const items = nestProfiles(ents).map((it) => ({ pts: it.pts, area: it.area, hole: it.hole, draw: () => entityDrawing(it.o) }));
+  if (hasOpen(ents)) {
+    // les traits ouverts qui se rejoignent forment aussi des contours : on prend le tour de chaque groupe fermé
+    const open = arrange(ents.filter((o) => !o.construction && isOpen(o)));
+    for (const o of open.outers) items.push({ pts: o.pts, area: o.area, draw: () => loopDrawing(o.loop) });
+    items.sort((x, y) => y.area - x.area);
+    items.forEach((it, i) => { let depth = 0; for (let j = 0; j < i; j++) if (inPoly(it.pts[0], items[j].pts)) depth++; it.hole = depth % 2 === 1; });
+    if (!items.length) throw new Error("L’esquisse ne contient aucun contour fermé : les traits ne se rejoignent pas tous. Dans l’esquisse, les bouts libres sont entourés en orange");
+  }
   if (!items.length) throw new Error("L’esquisse ne contient aucun contour fermé");
   let acc = null;
   for (const it of items) {
-    const d = entityDrawing(it.o);
+    const d = it.draw();
     if (!acc) acc = d; else acc = it.hole ? acc.cut(d) : acc.fuse(d);
   }
   return acc;
