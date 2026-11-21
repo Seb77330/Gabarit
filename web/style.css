@@ -577,3 +577,13 @@ table.bom th { font-weight: 650; background: var(--field); }
 .views button.wide { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; font-weight: 600; }
 .views button.wide i { display: inline-flex; width: 16px; height: 16px; }
 .views button.wide i svg { width: 16px; height: 16px; }
+.views .pas { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 3px 4px 3px 9px; font-size: 12px; font-weight: 600; color: var(--ink2); background: var(--glass); border: 1px solid var(--line); border-radius: 8px; backdrop-filter: blur(6px); }
+.views .pas select { flex: 1; min-width: 0; font-size: 12px; padding: 2px 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.meublebar .pcustom input { width: 62px; }
+.meublebar .mpct { gap: 4px; }
+.meublebar .mpct .in { display: inline-flex; align-items: center; gap: 2px; }
+.meublebar .mpct input { width: 60px; font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); text-align: right; }
+.meublebar input.bad { border-color: var(--err); }
+.meublebar .seclab { margin-left: 0; text-align: left; font-weight: 600; color: var(--ink); }
+.meublebar .mnote { font-size: 11.5px; color: var(--muted); margin: 0; }
+.pchk.info i { background: #5d7ea6; font-family: Georgia, serif; }

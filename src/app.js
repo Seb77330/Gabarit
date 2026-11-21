@@ -16,6 +16,7 @@ import { solveSketch, writeBack, C_LABELS, C_GLYPH } from "./constraints.js";
 import { createAssemblyUI } from "./assembly.js";
 import { sketchDXF } from "./dxf.js";
 import { createExtras } from "./extras.js";
+import { createFurniture } from "./furniture.js";
 import FONT from "./texte.ttf";
 try { const ff = new FontFace("gabarit-texte", FONT); ff.load().then((f) => { document.fonts.add(f); sketcher?.render(); }).catch(() => {}); } catch { /* aperçu avec la police par défaut */ }
 
@@ -89,6 +90,10 @@ const STORE = "gabarit-doc-v1";
 // ---------- Mode (Simple ou Expert) et thème (clair ou sombre) ----------
 const pref = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const setPref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* stockage plein */ } };
+// Pas du quadrillage (mm) : carreaux du sol, flèches à tirer, boutons − et +, grille du dessin.
+const PAS = [10, 5, 1, 0.5, 0.1, 0.01];
+const pasMm = () => { const v = Number(pref("gabarit-pas")); return PAS.includes(v) ? v : 1; };
+const pasText = (v) => String(v).replace(".", ",") + " mm";
 // Quelqu'un qui a déjà des pièces ici garde tous les outils ; une première visite commence en mode Simple.
 const HAD_WORK = ["gabarit-doc-v1", "gabarit-lib", "gabarit-tabs"].some((k) => pref(k));
 let mode = (() => {
@@ -323,8 +328,9 @@ function nextName(type) {
 }
 
 // ---------- Historique d'annulation ----------
-let hist = [], hidx = -1;
+let hist = [], hidx = -1, pending = false; // pending : un réglage en direct n'est pas encore rangé dans l'historique
 function pushHistory() {
+  pending = false;
   const j = JSON.stringify(doc);
   if (hist[hidx] === j) return;
   const first = hidx < 0; // le chargement d'une pièce n'est pas une modification
@@ -340,10 +346,31 @@ function save() {
   const t = curTab();
   if (t && t.name !== doc.name) { t.name = doc.name; saveTabs(); renderTabs(); }
 }
-function undo() { if (hidx > 0) { hidx--; restore(); } }
-function redo() { if (hidx < hist.length - 1) { hidx++; restore(); } }
+// Un réglage en cours (case pas encore validée, flèche tirée) compte comme un changement : on le range
+// dans l'historique avant de reculer, pour qu'Annuler défasse bien la dernière chose visible.
+function undo() {
+  if (pending) pushHistory();
+  if (hidx > 0) { hidx--; restore(); return true; }
+  return false;
+}
+function redo() { if (hidx < hist.length - 1) { hidx++; restore(); return true; } return false; }
+// Annuler / Rétablir avec un mot à l'écran : on voit que le raccourci a été pris, même si rien ne bouge.
+function undoSay() { toast(undo() ? "Annulé. Ctrl+Y pour rétablir." : "Rien à annuler.", 1600); }
+function redoSay() { toast(redo() ? "Rétabli." : "Rien à rétablir.", 1600); }
+// Ctrl+Z dans une case : le navigateur défait d'abord ce qui vient d'être tapé ; s'il n'a rien à défaire,
+// c'est la dernière modification de la pièce qui est annulée (avant, le raccourci ne faisait alors rien).
+let nativeUndo = 0;
+document.addEventListener("input", (e) => { if (e.inputType === "historyUndo" || e.inputType === "historyRedo") nativeUndo++; }, true);
+function undoKey(e, back) {
+  if (document.querySelector("dialog[open]")) return; // dans une fenêtre de question, le clavier reste au champ
+  const a = document.activeElement;
+  const typing = /^(INPUT|TEXTAREA)$/.test(a?.tagName) && !["checkbox", "radio", "range", "button"].includes(a.type);
+  const go = () => { if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName)) document.activeElement.blur(); if (back) undoSay(); else redoSay(); };
+  if (!typing) { e.preventDefault(); go(); return; }
+  const n = nativeUndo; setTimeout(() => { if (nativeUndo === n) go(); }, 0);
+}
 function restore() {
-  doc = JSON.parse(hist[hidx]); markDirty();
+  doc = JSON.parse(hist[hidx]); markDirty(); pending = false;
   if (isAsm()) { save(); asmUI.undoRefresh(); asmUI.render(); return; }
   if (st.sel && !feat(st.sel)) st.sel = null;
   if (st.editSketch && !feat(st.editSketch)) closeSketch(true);
@@ -352,12 +379,13 @@ function restore() {
 }
 function mutate(fn, transient = false) {
   fn(doc);
-  if (!transient) pushHistory(); else save();
+  if (!transient) pushHistory(); else { pending = true; save(); }
   renderTree(); requestBuild();
   if (st.editSketch) sketcher.render();
 }
 function loadDoc(d, fit = true) {
   if (extras?.isPrintOpen()) extras.closePrint();
+  meuble?.close();
   const wasAsm = isAsm();
   doc = Object.assign(d.kind === "assembly" ? emptyAsm() : emptyDoc(), d);
   document.body.classList.toggle("asm", isAsm());
@@ -430,7 +458,7 @@ function onWorker(m) {
     st.building = false; showBusy(false);
     if (m.heap > 1.4e9) setTimeout(restartWorker, 50); // libère la mémoire du noyau
     st.errors = m.errors; st.info = m.info; st.mesh = m.mesh; st.lastMs = m.ms;
-    viewer.setMesh(m.mesh); extras.refreshPrint();
+    viewer.setMesh(m.mesh); extras.refreshPrint(); meuble?.refresh();
     viewer.setCog(st.showCog && m.mesh?.cog ? m.mesh.cog : null);
     if (st.firstFit && m.mesh) { viewer.fit([1, -1.3, 0.9]); st.firstFit = false; }
     if (st.editSketch) updateSketchRefs();
@@ -552,7 +580,7 @@ const TOOLBAR = [
   ["Volumes", [["extrude", "Extrusion"], ["cut", "Enlèvement"], ["revolve", "Révolution"], ["loft", "Lissage"], ["sweep", "Balayage"], ["helix", "Ressort"], ["shapes", "Formes"]]],
   ["Finitions", [["hole", "Perçage"], ["thread", "Filetage"], ["fillet", "Congé"], ["chamfer", "Chanfrein"], ["shell", "Coque"], ["draft", "Dépouille"], ["rib", "Nervure"], ["slice", "Coupe à plat"], ["stretch", "Allonger"]]],
   ["Copies", [["mirror", "Symétrie"], ["pattern", "Répétition"], ["import", "Importer"]]],
-  ["Outils", [["measure", "Mesurer"], ["section", "Coupe"], ["print", "Impression 3D"], ["drawing", "Mise en plan"]]],
+  ["Outils", [["measure", "Mesurer"], ["section", "Coupe"], ["print", "Impression 3D"], ["meuble", "Dans un meuble"], ["drawing", "Mise en plan"]]],
 ];
 // Mode Simple : moins d'outils, des mots de tous les jours (les mêmes outils derrière).
 const TOOLBAR_SIMPLE = [
@@ -560,7 +588,7 @@ const TOOLBAR_SIMPLE = [
   ["Volume", [["extrude", "Donner du volume"], ["cut", "Creuser"], ["revolve", "Faire tourner"], ["slice", "Couper à plat"], ["stretch", "Allonger"]]],
   ["Finitions", [["hole", "Percer"], ["fillet", "Arrondir"], ["chamfer", "Biseauter"], ["shell", "Vider"]]],
   ["Copies", [["mirror", "Symétrie"], ["pattern", "Répéter"]]],
-  ["Vérifier", [["measure", "Mesurer"], ["print", "Imprimer en 3D"]]],
+  ["Vérifier", [["measure", "Mesurer"], ["print", "Imprimer en 3D"], ["meuble", "Dans un meuble"]]],
 ];
 const toolbar = () => (isSimple() ? TOOLBAR_SIMPLE : TOOLBAR);
 const TOOL_ICON = { shapes: "shape" };
@@ -596,6 +624,7 @@ const TOOL_TIPS = {
   section: "Couper la vue pour voir l’intérieur",
   drawing: "Créer le plan 2D de la pièce, à imprimer ou en PDF",
   print: "Voir les surplombs à soutenir et poser la pièce à plat automatiquement",
+  meuble: "Poser la pièce dans une case Kallax, une étagère Billy, un bac ou ton propre meuble : voir si elle rentre, combien tu en ranges, et jusqu’où l’agrandir",
   slice: "Couper la pièce bien droit et enlever tout ce qui dépasse d’un côté (raccourcir, retirer un socle…)",
   scale: "Agrandir ou réduire toute la pièce, en pourcentage ou en millimètres",
   stretch: "Choisir une partie de la pièce entre deux traits et lui donner une autre taille, sans déformer le reste (rallonger une tige, un pied, élargir une assise…)",
@@ -612,19 +641,26 @@ function renderCorner() {
     h("button", { class: "ko", title: st.editSketch ? "Annuler l’esquisse (oublier les changements)" : "Annuler les changements (Échap)", onclick: () => (st.editSketch ? cancelSketch() : cancelFeature()) }, "✕"));
 }
 let lastTool = null;
+let meuble = null; // « Essayer dans un meuble », créé plus bas avec la vue
 function toolAction(k) {
-  if (!["measure", "section", "drawing", "print", "import", "shapes"].includes(k)) lastTool = k;
+  if (!["measure", "section", "drawing", "print", "meuble", "import", "shapes"].includes(k)) lastTool = k;
   if (engineFailed && !["sketch", "plane", "measure", "section"].includes(k)) toast("Le moteur 3D n’a pas démarré dans cet aperçu : ouvre Gabarit.html dans Chrome, Edge ou Firefox pour créer des volumes.");
   if (st.editSketch) {
     if (["measure", "section"].includes(k)) { toast("Mesure et coupe : sors d’abord de l’esquisse."); return; }
     if (st.afterSketch && ["extrude", "cut", "revolve", "rib"].includes(k)) st.afterSketch = null; // l'outil cliqué l'emporte
     closeSketch();
   }
-  if (k === "measure") { toggleMeasure(); return; }
-  if (k === "section") { toggleSection(); return; }
+  if (k === "measure") { meuble?.close(); toggleMeasure(); return; }
+  if (k === "section") { meuble?.close(); toggleSection(); return; }
   if (k === "drawing") { openDrawing(); return; }
-  if (k === "print") { extras.printPanel(); return; }
+  if (k === "print") { meuble?.close(); extras.printPanel(); return; }
   if (extras.isPrintOpen()) extras.closePrint();
+  if (k === "meuble") {
+    if (isAsm()) { toast("L’essai dans un meuble se fait sur une pièce : ouvre-la dans son onglet."); return; }
+    stopPick(); stopMeasure(); if (viewer.section) toggleSection(); if (!meuble.isOpen()) select(null);
+    meuble.panel(); return;
+  }
+  meuble.close();
   stopPick(); stopMeasure();
   if (k === "plane") { choosePlane((base) => { insertFeature({ id: newId("f"), type: "plane", name: nextName("plane"), base, offset: "10", rot: "x", angle: "0" }); }, "Le nouveau plan part de quel plan ?"); return; }
   if (k === "import") { importFile(); return; }
@@ -757,6 +793,7 @@ function shapesBox() {
 function addShape(kind) {
   if (st.editSketch) closeSketch();
   if (extras.isPrintOpen()) extras.closePrint();
+  meuble.close();
   stopPick(); stopMeasure();
   const [label, defs] = SHAPES[kind];
   const f = { id: newId("f"), type: "shape", kind, name: nextNameRaw(label), mode: "add", ...defs, x: "0", y: "0", z: "0", rx: "0", ry: "0", rz: "0" };
@@ -1132,7 +1169,8 @@ function stepButtons(live, step, done) {
   const bump = (dir, e, k = 1) => {
     const input = live(); if (!input) return false;
     const n = Number(String(input.value).replace(",", ".")); if (!isFinite(n) || !String(input.value).trim()) return false;
-    input.value = String(Math.round((n + (e.shiftKey ? 10 : 1) * step * dir * k) * 1000) / 1000); input.dispatchEvent(new Event("input")); return true;
+    const stp = typeof step === "function" ? step() : step;
+    input.value = String(Math.round((n + (e.shiftKey ? 10 : 1) * stp * dir * k) * 1000) / 1000); input.dispatchEvent(new Event("input")); return true;
   };
   const mk = (dir, text, title) => h("button", { type: "button", class: "stepb", tabindex: "-1", title, "aria-label": title, "data-step": dir > 0 ? "plus" : "minus",
     onpointerdown: (e) => {
@@ -1147,6 +1185,7 @@ function exprField(label, obj, key, unit = "mm", opts = {}) {
   const v = varsMap(doc.params);
   const calc = h("div", { class: "calc" });
   const input = h("input", { type: "text", value: obj[key] ?? opts.def ?? "", spellcheck: "false", inputmode: "decimal", "data-hk": key });
+  const stp = () => opts.step || (unit === "mm" ? pasMm() : 1); // les longueurs avancent du pas choisi
   const check = () => {
     const raw = input.value;
     if (opts.optional && !raw.trim()) { input.classList.remove("bad"); calc.classList.remove("bad"); calc.textContent = ""; input.placeholder = opts.optional; return; }
@@ -1160,12 +1199,12 @@ function exprField(label, obj, key, unit = "mm", opts = {}) {
   input.addEventListener("keydown", (e) => {
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       const n = Number(input.value.replace(",", ".")); if (!isFinite(n)) return;
-      e.preventDefault(); const s = (e.shiftKey ? 10 : 1) * (opts.step || 1) * (e.key === "ArrowUp" ? 1 : -1);
+      e.preventDefault(); const s = (e.shiftKey ? 10 : 1) * stp() * (e.key === "ArrowUp" ? 1 : -1);
       input.value = String(Math.round((n + s) * 1000) / 1000); input.dispatchEvent(new Event("input")); pushHistory();
     }
   });
   check();
-  const [less, more] = stepButtons(() => (input.isConnected ? input : input.closest ? document.querySelector(`#props [data-hk="${key}"]`) : null), opts.step || 1, () => pushHistory());
+  const [less, more] = stepButtons(() => (input.isConnected ? input : input.closest ? document.querySelector(`#props [data-hk="${key}"]`) : null), stp, () => pushHistory());
   return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, less, input, more, unit ? h("span", { class: "unit" }, unit) : null), calc);
 }
 function segField(label, obj, key, options, after) {
@@ -1470,7 +1509,7 @@ function drawProps() {
       });
       input.addEventListener("change", () => pushHistory());
       fields[kk] = input;
-      const [less, more] = stepButtons(() => (input.isConnected ? input : document.querySelector(`#props [data-sf="${kk}"]`)), step, () => pushHistory());
+      const [less, more] = stepButtons(() => (input.isConnected ? input : document.querySelector(`#props [data-sf="${kk}"]`)), unit === "mm" ? pasMm : step, () => pushHistory());
       return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, less, input, more, h("span", { class: "unit" }, unit)));
     };
     add(mk("pct", "Agrandir de (négatif pour réduire)", "%", 5));
@@ -1509,7 +1548,7 @@ function drawProps() {
           });
           input.addEventListener("change", () => pushHistory());
           fields[kk] = input;
-          const [less, more] = stepButtons(() => (input.isConnected ? input : document.querySelector(`#props [data-zf="${kk}"]`)), step, () => pushHistory());
+          const [less, more] = stepButtons(() => (input.isConnected ? input : document.querySelector(`#props [data-zf="${kk}"]`)), unit === "mm" ? pasMm : step, () => pushHistory());
           return h("div", { class: "field" }, h("label", {}, label), h("div", { class: "in" }, less, input, more, h("span", { class: "unit" }, unit)));
         };
         card.append(mk("size", `Nouvelle taille de cette partie (au départ ${nf(len, 1)} mm)`, "mm", 1), mk("add", "Soit, en plus (négatif pour raccourcir)", "mm", 1), mk("pct", "Ou en pourcentage", "%", 5));
@@ -1788,6 +1827,7 @@ const SK_HINTS = {
 };
 let sketcher;
 function openSketch(id, isNew = false) {
+  meuble?.close(); if (extras?.isPrintOpen()) extras.closePrint(); // la pièce reprend sa place avant de dessiner dessus
   stopPick(false); clearFaceSel();
   st.editSketch = id; st.sel = id; st.skSel = null; st.skNew = isNew; st.skSnap = JSON.stringify(doc);
   $("#sketch").hidden = false; $("#views").hidden = true; banner(null);
@@ -1884,7 +1924,7 @@ function renderSketchTools() {
       h("button", { class: v === cur ? "on" : "", "data-m": v, onclick: () => sketcher.setTool(v) }, h("span", { html: ICONS[v] }), l))));
   }
   box.append(h("hr"), h("label", {}, "Pas de grille"),
-    h("select", { onchange: (e) => { sketcher.snapStep = Number(e.target.value); sketcher.render(); } }, [0.1, 0.5, 1, 2, 5, 10].map((v) => h("option", { value: v, selected: v === sketcher.snapStep }, nf(v) + " mm"))),
+    h("select", { id: "skPas", title: "Taille des carreaux : les points se posent sur ce pas", onchange: (e) => setPas(Number(e.target.value)) }, [...new Set([...PAS, 2])].sort((a, b) => a - b).map((v) => h("option", { value: v, selected: v === sketcher.snapStep }, pasText(v)))),
     h("hr"), h("button", { class: "tbtn", onclick: () => sketcher.fitView() }, h("span", { html: ICONS.fit }), "Recadrer"),
     h("button", { class: "tbtn on", title: "Entrée", onclick: () => closeSketch() }, h("span", { html: ICONS.done }), st.afterLabel || "Valider"));
   $("#skHint").textContent = fr(SK_HINTS[sketcher.tool] || "");
@@ -2020,7 +2060,7 @@ function refreshHandles() {
   handleList = [];
   // pendant qu'on choisit des zones ou une face d'arrivée, la flèche ne doit pas prendre les clics
   const busy = st.pick && (st.pick.kind === "regions" || st.pick.kind === "upto");
-  const f = st.sel && !busy && !isAsm() && !st.editSketch && !extras?.isPrintOpen() ? feat(st.sel) : null;
+  const f = st.sel && !busy && !isAsm() && !st.editSketch && !stageTool() ? feat(st.sel) : null;
   if (f && !f.suppressed && !engineFailed) {
     const vars = varsMap(doc.params);
     const plain = (v) => /^\s*-?[\d.,]*\s*$/.test(String(v ?? "")); // une formule ne se tire pas à la souris
@@ -2081,7 +2121,7 @@ function handleHover(id, e) {
 // ---------- Aide des gestes : ce qu'on peut faire maintenant avec la souris, toujours écrit en bas de la vue ----------
 function renderGestures() {
   $("#gestes")?.remove();
-  if (isAsm() || st.editSketch || !$("#welcome")?.hidden || extras?.isPrintOpen() || $(".secbar")) return;
+  if (isAsm() || st.editSketch || !$("#welcome")?.hidden || stageTool() || $(".secbar")) return;
   if (viewer.pickMode || st.pick) return; // le bandeau du haut dit déjà où cliquer
   let items = [];
   const has = (fn) => handleList.some(fn);
@@ -2089,7 +2129,7 @@ function renderGestures() {
   if (has((x) => x.ring)) items.push(["turn", "Tire un arc : tourner"]);
   for (const x of handleList) if (["dist", "at", "add"].includes(x.key)) items.push(["pull", `Tire la flèche${x.key === "at" ? "" : " orange"} : ${handleUse(x)}`]);
   if (items.length) items.push(["keycap", "Aucune touche à tenir. Avec Maj : réglage fin"], ["digits", has((x) => x.ring) ? "Pour agrandir : les chiffres de « Taille » à gauche, ou leurs boutons − et +" : "Ou change les chiffres à gauche, avec leurs boutons − et +"]);
-  else if (st.mesh) items = [["mouseL", "Clic sur une étape à gauche, ou double-clic sur la pièce : changer une taille"], ["mouseL", "Clic gauche maintenu : tourner la vue"], ["mouseR", "Clic droit maintenu : déplacer la vue"], ["wheel", "Molette : zoomer"]];
+  else if (st.mesh) items = [["mouseL", "Clic sur une étape à gauche, ou double-clic sur la pièce : changer une taille"], ["mouseL", "Clic gauche maintenu : tourner la vue"], ["mouseR", "Clic droit maintenu : déplacer la vue"], ["wheel", "Molette : zoomer"], ["keycap", "Ctrl+Z : annuler"]];
   else return;
   if (pref("gabarit-gestes") === "0") {
     $(".stage").append(h("button", { id: "gestes", class: "gestes mini", title: "Afficher l’aide des gestes", onclick: () => { setPref("gabarit-gestes", "1"); renderGestures(); } }, h("i", { html: ICONS.mouseL }), "Gestes"));
@@ -2105,10 +2145,10 @@ function onHandleDrag(id, delta, phase, e) {
   if (phase === "cancel") { tip.remove(); return 0; }
   if (phase === "end") { tip.remove(); pushHistory(); renderProps(); requestBuild(0); setTimeout(refreshHandles, 0); return 0; }
   const deg = hd.unit === "°";
-  // au millimètre (au dixième avec Maj) ; les angles par crans de 5° (au degré avec Maj)
-  const step = deg ? (e.shiftKey ? 1 : 5) : e.shiftKey ? 0.1 : 1; const k = hd.k || 1;
+  // au pas choisi (dix fois plus fin avec Maj) ; les angles par crans de 5° (au degré avec Maj)
+  const pas = pasMm(); const step = deg ? (e.shiftKey ? 1 : 5) : e.shiftKey ? pas / 10 : pas; const k = hd.k || 1;
   let v = Math.round((hd.base + delta * k) / step) * step; if (hd.min !== undefined) v = Math.max(hd.min, v);
-  v = Math.round(v * 1000) / 1000;
+  v = Math.round(v * 10000) / 10000;
   let shown = v; if (deg) { shown = ((v % 360) + 360) % 360; if (shown > 180) shown -= 360; } // un angle reste entre −180° et 180°
   if (String(shown) !== String(hd.obj[hd.key])) {
     mutate(() => { hd.obj[hd.key] = String(shown); }, true);
@@ -2117,7 +2157,7 @@ function onHandleDrag(id, delta, phase, e) {
     if (hd.obj.type === "slice") renderPlanes();
     hd.after?.();
   }
-  tip.textContent = deg ? `${hd.label} : ${nf(shown, 0)}°` : `${hd.label} : ${nf(v, 2)} mm`; tip.style.left = e.clientX + 16 + "px"; tip.style.top = e.clientY + 14 + "px";
+  tip.textContent = deg ? `${hd.label} : ${nf(shown, 0)}°` : `${hd.label} : ${nf(v, pas < 0.1 || (e.shiftKey && pas < 1) ? 3 : 2)} mm`; tip.style.left = e.clientX + 16 + "px"; tip.style.top = e.clientY + 14 + "px";
   return (v - hd.base) / k;
 }
 
@@ -2391,7 +2431,7 @@ setTimeout(watchVersion, 5000); setInterval(watchVersion, 20 * 60 * 1000);
 
 // ---------- Divers ----------
 let toastTimer;
-function toast(msg) { const t = $("#toast"); t.textContent = fr(msg); t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3800); }
+function toast(msg, ms = 3800) { const t = $("#toast"); t.textContent = fr(msg); t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms); }
 function showBusy(on, text = "Calcul…") { const b = $("#busy"); b.hidden = !on; b.classList.remove("long"); if (on) b.lastChild.textContent = fr(text); }
 function layoutMode() {
   const M = document.querySelector("main");
@@ -2427,6 +2467,7 @@ function renderChallenge(ch) {
 function renderCoach() {
   $("#coach")?.remove();
   const ch = !isAsm() && doc.defi && CHALLENGES.find((c) => c.key === doc.defi.key);
+  if (stageTool()) return; // un outil occupe le bas de la vue
   if (ch && isSimple() && $("#welcome").hidden && !st.editSketch) { renderChallenge(ch); return; }
   if (!isSimple() || isAsm() || st.editSketch || st.sel || st.pick || viewer.pickMode || pref("gabarit-coach") === "0" || !$("#welcome").hidden) return;
   const has = !!st.mesh || doc.features.length > 0;
@@ -2505,9 +2546,12 @@ function help() {
   dlg.append(h("div", { class: "dh" }, "Comment ça marche"), h("div", { class: "db", html: fr(`
     <h3>Deux modes</h3><p>En haut à droite, choisis <b>Simple</b> (l’essentiel, des formes prêtes, des mots de tous les jours) ou <b>Expert</b> (tous les outils). Tu peux passer de l’un à l’autre à tout moment, ta pièce ne change pas. Le bouton lune ou soleil change le thème.</p>
     <h3>Formes prêtes</h3><p><b>Formes prêtes</b> pose une boîte, un cylindre, une sphère, un engrenage, un texte… Clique ensuite sur la pièce pour la placer, règle sa taille à gauche, et choisis <b>Ajouter de la matière</b> ou <b>Creuser</b>.</p>
-    <h3>Tout à la souris</h3><p>Quand tu choisis une forme prête, un fichier importé, une extrusion ou une coupe, des <b>flèches</b> apparaissent sur la pièce : tire-les pour déplacer ou pour régler l’épaisseur. La valeur avance au millimètre ; garde <b>Maj</b> enfoncée pour le dixième. Les <b>arcs</b> de couleur font tourner une forme prête ou un fichier importé, par crans de 5° (au degré près avec Maj). Tu peux toujours taper la valeur exacte à gauche.</p>
+    <h3>Tout à la souris</h3><p>Quand tu choisis une forme prête, un fichier importé, une extrusion ou une coupe, des <b>flèches</b> apparaissent sur la pièce : tire-les pour déplacer ou pour régler l’épaisseur. La valeur avance du pas choisi (1 mm au départ) ; garde <b>Maj</b> enfoncée pour dix fois plus fin. Les <b>arcs</b> de couleur font tourner une forme prête ou un fichier importé, par crans de 5° (au degré près avec Maj). Tu peux toujours taper la valeur exacte à gauche.</p>
     <h3>Aucune touche à tenir</h3><p>Tout se fait à la souris, sans touche enfoncée : tire une flèche pour déplacer ou épaissir, tire un arc pour tourner. En bas de la vue, une ligne rappelle à chaque instant <b>ce que fait chaque geste</b>. Chaque chiffre a ses boutons <b>−</b> et <b>+</b> : un clic avance d’un cran, rester appuyé fait défiler.</p>
     <h3>Changer la taille</h3><p>Le bouton <b>Taille</b>, à droite de la vue, agrandit ou réduit toute la pièce : tape « 30 » pour 30 % de plus, ou donne une dimension en millimètres et le reste suit.</p>
+    <h3>Annuler</h3><p><b>Ctrl+Z</b> annule la dernière modification, <b>Ctrl+Y</b> la rétablit (ou les deux flèches en haut de l’écran). Ça marche aussi quand le curseur est dans une case : ce que tu viens de taper est défait d’abord, puis les modifications de la pièce, une par une. Un petit mot confirme chaque annulation.</p>
+    <h3>Quadrillage fin</h3><p>À droite de la vue, <b>Pas</b> règle la taille des plus petits carreaux, de 10 mm à 0,01 mm. Zoome : les petits carreaux apparaissent sur le sol. Les flèches, les boutons <b>−</b> et <b>+</b> et la grille du dessin avancent de ce pas, et dix fois plus fin avec <b>Maj</b>.</p>
+    <h3>Essayer dans un meuble</h3><p><b>Dans un meuble</b> pose ta pièce dans une case Kallax, un niveau de Billy, un bac ou n’importe quel meuble dont tu tapes les dimensions intérieures. Gabarit dit si elle <b>rentre</b>, combien il reste de place, <b>combien tu peux en ranger</b> et jusqu’où tu peux l’<b>agrandir</b>. Glisse la pièce à la souris pour la déplacer, tourne-la ou couche-la, et change sa taille : la réponse suit. « Garder ce meuble » ajoute le tien à la liste. Les dimensions proposées sont indicatives : vérifie avec un mètre.</p>
     <h3>Allonger une partie</h3><p>Pour changer seulement un morceau (le milieu d’une chaise pour en faire un banc, la tige d’une lampe), choisis <b>Allonger</b>, pose <b>deux traits</b> sur la pièce en cliquant deux fois, puis donne la taille de la partie comprise entre les deux, en millimètres ou en pourcentage, ou tire la flèche orange. Le reste de la pièce ne change pas. Tu peux allonger plusieurs parties, en hauteur, en largeur ou en longueur. Après cette étape, les formes rondes deviennent de petites facettes très fines : fais plutôt les arrondis et les trous avant.</p>
     <h3>Onglets</h3><p>Chaque pièce ouverte a son onglet. Un <b>point</b> sur l’onglet signale une pièce modifiée. Quand tu fermes l’onglet, Gabarit te demande si tu veux l’<b>enregistrer</b> : Enregistrer, Ne pas enregistrer ou Annuler.</p>
     <h3>Changer une cote sur la pièce</h3><p><b>Double-clique</b> sur une face : l’étape qui l’a faite s’ouvre, et ses cotes s’affichent à côté de la souris. Tape la nouvelle valeur, puis Entrée. Échap annule.</p>
@@ -2661,7 +2705,7 @@ function dimCard(f, x, y) {
 }
 let whoseBusy = false;
 $("#view").addEventListener("dblclick", (e) => {
-  if (st.editSketch || isAsm() || !st.mesh || st.pick || !workerReady || whoseBusy || viewer.pickMode || extras?.isPrintOpen()) return;
+  if (st.editSketch || isAsm() || !st.mesh || st.pick || !workerReady || whoseBusy || viewer.pickMode || stageTool()) return;
   const fh = viewer.hitFace(e); if (!fh) return;
   clearFaceSel(); whoseBusy = true;
   const req = ++exportReq; const x = e.clientX, y = e.clientY; const stamp = JSON.stringify(doc);
@@ -2727,13 +2771,30 @@ const extras = createExtras({
   setPrintDown: (g) => { if (g) doc.printDown = g; else delete doc.printDown; pushHistory(); },
   commands: () => commandList(), publish: () => publishPack(),
 });
+// Essai dans un meuble : il règle la taille par la même étape « Taille » que le bouton à côté de la vue.
+function scaleStep() {
+  const live = doc.features.slice(0, st.stopAt ?? doc.features.length).filter((g) => !g.suppressed);
+  return live.at(-1)?.type === "scale" ? live.at(-1) : null;
+}
+meuble = createFurniture({
+  h, $, fr, nf, toast, viewer, st, markTool, stepButtons, pas: pasMm,
+  getScale: () => { const f = scaleStep(); if (!f) return 100; try { const v = evalExpr(f.k === undefined || f.k === "" ? 100 : f.k, varsMap(doc.params)); return v > 0 ? v : 100; } catch { return 100; } },
+  setScale: (k, transient) => {
+    const v = String(Math.round(k * 1000) / 1000); const f = scaleStep();
+    if (f) mutate(() => { f.k = v; }, transient);
+    else mutate((d) => { const n = { id: newId("f"), type: "scale", name: nextName("scale"), k: v }; if (st.stopAt !== null) { d.features.splice(st.stopAt, 0, n); st.stopAt++; } else d.features.push(n); }, transient);
+  },
+  commit: () => pushHistory(),
+  changed: () => { renderGestures(); renderCoach(); },
+});
+function stageTool() { return !!(extras?.isPrintOpen() || meuble?.isOpen()); } // la vue est occupée par un outil : pas de flèches ni de double-clic
 const KEYS = {
   sketch: "dessin profil 2d croquis", extrude: "volume epaisseur bossage tirer", cut: "creuser enlever percer poche", revolve: "tourner tour axe rond",
   hole: "trou percer vis fraisage lamage insert ecrou m3 m4 m5 passage", fillet: "arrondi arrondir rayon conge", chamfer: "biseau casser angle", shell: "evider creux boite paroi",
   thread: "filet filetage vis taraud taraudage m3 m4 m5 m6 m8 m10 m12", helix: "ressort helice spirale", rib: "renfort raidisseur gousset",
   mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
   draft: "demoulage incliner", import: "step stl ouvrir modele svg dxf logo dessin", measure: "distance cote longueur", section: "couper interieur",
-  print: "impression imprimante 3d support surplomb orientation trancheur", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
+  print: "impression imprimante 3d support surplomb orientation trancheur", meuble: "meuble etagere ikea kallax billy eket besta bac casier rangement ranger rentre tient gridfinity tiroir", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
   scale: "taille agrandir reduire echelle pourcentage plus grand plus petit dimension",
   stretch: "etirer agrandir rallonger allonger raccourcir section zone partie banc tige pied",
   shapes: "forme prete primitive boite cube cylindre sphere boule cone tube anneau tore etoile coeur engrenage texte",
@@ -2763,8 +2824,8 @@ function commandList() {
     { label: "Exporter en OBJ", keys: "blender rendu", run: () => doExport("obj") },
     { label: "Exporter une esquisse en DXF", keys: "laser cnc decoupe", run: () => moreFormats() },
     { label: "Ajouter un paramètre", keys: "variable cote nommee", when: () => !isAsm(), run: () => addParam() },
-    { label: "Annuler", keys: "ctrl z retour", run: () => undo() },
-    { label: "Rétablir", keys: "ctrl y refaire", run: () => redo() },
+    { label: "Annuler", keys: "ctrl z retour", run: () => undoSay() },
+    { label: "Rétablir", keys: "ctrl y refaire", run: () => redoSay() },
     { label: "Vue : recadrer", keys: "zoom tout voir", run: () => viewer.fit() },
     { label: "Vue : 3D", keys: "iso perspective", run: () => viewer.fit([1, -1.3, 0.9]) },
     { label: "Vue : face", run: () => viewer.fit([0, -1, 0]) }, { label: "Vue : dessus", run: () => viewer.fit([0, 0, 1]) }, { label: "Vue : droite", run: () => viewer.fit([1, 0, 0]) },
@@ -2841,7 +2902,19 @@ renderTools();
 $("#views").append(
   h("div", { class: "row" }, h("button", { title: "Tout voir (F)", onclick: () => viewer.fit() }, "Recadrer"), h("button", { title: "Vue isométrique (Ctrl 7)", onclick: () => viewer.fit([1, -1.3, 0.9]) }, "3D")),
   h("div", { class: "row" }, h("button", { class: "wide", id: "sizeBtn", title: "Agrandir ou réduire toute la pièce, en % ou en mm", onclick: () => toolAction("scale") }, h("i", { html: ICONS.scale }), "Taille")),
+  h("label", { class: "pas", title: "Taille des plus petits carreaux. Les flèches, les boutons − et + et le dessin avancent de ce pas (dix fois plus fin avec Maj)." }, "Pas",
+    h("select", { id: "pasSel", onchange: (e) => setPas(Number(e.target.value)) }, PAS.map((v) => h("option", { value: v, selected: v === pasMm() }, pasText(v))))),
 );
+// Change le pas partout : sol, flèches, boutons, dessin.
+function setPas(v, quiet) {
+  if (PAS.includes(v)) setPref("gabarit-pas", String(v));
+  sketcher.snapStep = v; viewer.setPas(PAS.includes(v) ? v : pasMm());
+  const a = $("#pasSel"); if (a && PAS.includes(v)) a.value = String(v);
+  const b = $("#skPas"); if (b) b.value = String(v);
+  if (st.editSketch) sketcher.render();
+  if (!quiet) toast(`Pas de ${pasText(v)} : zoome pour voir les petits carreaux. Avec Maj, les flèches vont dix fois plus fin.`, 3200);
+}
+setPas(pasMm(), true);
 viewer.mountCube($("#views"), (dir) => viewer.fit(dir));
 document.querySelector(".file").addEventListener("click", (e) => {
   const mb = e.target.closest("[data-mode]"); if (mb) { setMode(mb.dataset.mode); return; }
@@ -2850,8 +2923,8 @@ document.querySelector(".file").addEventListener("click", (e) => {
   if (a === "new") newDialog();
   if (a === "open") $("#fileIn").click();
   if (a === "save") saveFile();
-  if (a === "undo") undo();
-  if (a === "redo") redo();
+  if (a === "undo") undoSay();
+  if (a === "redo") redoSay();
   if (a === "stl") doExport("stl");
   if (a === "step") doExport("step");
   if (a === "help") help();
@@ -2876,8 +2949,8 @@ document.addEventListener("keydown", (e) => {
   // un calcul qui dure : Échap l'annule avant toute autre chose
   if (e.key === "Escape" && st.building && Date.now() - buildStart > 1200 && !isAsm()) { e.preventDefault(); e.stopPropagation(); cancelBuild(); return; }
   if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); extras.palette(); return; }
-  if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { if (!typing) { e.preventDefault(); undo(); } return; }
-  if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { if (!typing) { e.preventDefault(); redo(); } return; }
+  if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) { undoKey(e, true); return; }
+  if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) { undoKey(e, false); return; }
   if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(); return; }
   if (mod && /^[1-8]$/.test(e.key) && !typing && !st.editSketch) {
     e.preventDefault();
