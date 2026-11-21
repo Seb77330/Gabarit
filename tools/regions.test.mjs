@@ -1,6 +1,7 @@
 import { arrange, faceAt, insidePoint, sagArc, sagOf, splitAll } from "../src/regions.js";
 import { cornerFillet, roundCorners, outline, polyArea } from "../src/geo.js";
-import { FURNITURE, findFurniture, rotatedBox, rotatePoint, orientQuat, fitCheck, bestOrient, ORIENTS } from "../src/furniture.js";
+import { FURNITURE, STORES, findFurniture, isOpenKind, fitCheck, bestOrient, placeAt, magnet } from "../src/furniture.js";
+import { IDENT, MOVES, POSES, omul, odet, oapply, osame, oread, axisAngle, orientedBox } from "../src/orient.js";
 let fails = 0; const ok = (c, m, x) => { console.log((c ? "ok : " : "ÉCHEC : ") + m + (x !== undefined ? " → " + JSON.stringify(x) : "")); if (!c) fails++; };
 const near = (a, b, t = 1e-3) => Math.abs(a - b) < t;
 const areas = (ar) => ar.faces.map((f) => +f.area.toFixed(4)).sort((a, b) => a - b);
@@ -46,25 +47,41 @@ ar = arrange([{ type: "poly", pts: [[0, 0], [20, 0, 0, 3], [20, 10, 0, 3], [0, 1
 ar = arrange([{ type: "path", pts: [[0, 0], [20, 0, 0, 4], [20, 10]] }, { type: "path", pts: [[20, 10], [0, 10], [0, 0]] }]); ok(ar.faces.length === 1 && near(ar.faces[0].area, 200 - (16 - Math.PI * 4), 1e-4), "chemin avec coin arrondi + chemin : une zone", areas(ar));
 // performance
 { const ents = []; for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) ents.push(circle(i * 7, j * 7, 10)); const t = Date.now(); ar = arrange(ents); ok(Date.now() - t < 3000, `144 cercles qui se croisent : ${ar.faces.length} zones en ${Date.now() - t} ms`); }
-// ---------- essai dans un meuble ----------
+// ---------- essai dans un meuble, sens de pose ----------
 {
   const bb = [[-10, 0, 5], [50, 30, 205]]; // 60 × 30 × 200, pas centrée
-  ok(rotatedBox(bb, { up: 2, turn: 0 }).size.join() === "60,30,200", "meuble : debout, la pièce garde ses dimensions");
-  ok(rotatedBox(bb, { up: 2, turn: 1 }).size.join() === "30,60,200", "meuble : un quart de tour échange largeur et profondeur");
-  ok(rotatedBox(bb, { up: 1, turn: 0 }).size.join() === "60,200,30", "meuble : couchée sur le dos, la hauteur part en profondeur");
-  ok(rotatedBox(bb, { up: 0, turn: 0 }).size.join() === "200,30,60", "meuble : couchée sur le côté, la hauteur part en largeur");
-  // le quaternion donné à la vue tourne les points comme le calcul
-  const qrot = (q, v) => { const [x, y, z, w] = q; const u = [x, y, z]; const cr = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; const t = cr(u, v).map((c) => c * 2); const c2 = cr(u, t); return v.map((c, i) => c + w * t[i] + c2[i]); };
-  ok(ORIENTS.every((o) => { const a = qrot(orientQuat(o), [1, 2, 3]), b = rotatePoint(o, [1, 2, 3]); return a.every((c, i) => near(c, b[i], 1e-9)); }), "meuble : les 6 sens de pose tournent la vue comme le calcul");
+  ok(orientedBox(bb, IDENT).size.join() === "60,30,200", "sens : debout, la pièce garde ses dimensions");
+  ok(orientedBox(bb, MOVES.gauche).size.join() === "30,60,200", "sens : un quart de tour échange largeur et profondeur");
+  ok(orientedBox(bb, MOVES.avant).size.join() === "60,200,30", "sens : couchée vers l'avant, la hauteur part en profondeur");
+  ok(orientedBox(bb, MOVES.cote).size.join() === "200,30,60", "sens : couchée sur le côté, la hauteur part en largeur");
+  ok(oapply(MOVES.gauche, [1, 0, 0]).join() === "0,1,0" && oapply(MOVES.cote, [0, 0, 1]).join() === "1,0,0" && oapply(MOVES.avant, [0, 0, 1]).join() === "0,-1,0", "sens : à gauche X part vers le fond, sur le côté le haut part à droite, vers l'avant le haut part devant");
+  let m = IDENT; for (let i = 0; i < 4; i++) m = omul(MOVES.gauche, m); ok(osame(m, IDENT), "sens : quatre quarts de tour reviennent au départ");
+  ok(osame(omul(MOVES.gauche, MOVES.gauche), MOVES.demi) && osame(omul(MOVES.miroir, MOVES.miroir), IDENT) && odet(MOVES.miroir) === -1 && odet(MOVES.cote) === 1, "sens : deux quarts font un demi-tour, deux miroirs s'annulent");
+  // l'axe et l'angle donnés au noyau refont bien la matrice (formule de Rodrigues), pour les 24 rotations
+  const all = []; const seen = new Set(); const todo = [IDENT];
+  while (todo.length) { const x = todo.pop(); const k = x.join(); if (seen.has(k)) continue; seen.add(k); all.push(x); for (const g of [MOVES.gauche, MOVES.cote, MOVES.avant]) todo.push(omul(g, x)); }
+  const rod = ({ axis: [x, y, z], deg }, v) => { const t = deg * Math.PI / 180, c = Math.cos(t), s = Math.sin(t), d = (x * v[0] + y * v[1] + z * v[2]) * (1 - c); const cr = [y * v[2] - z * v[1], z * v[0] - x * v[2], x * v[1] - y * v[0]]; return [v[0] * c + cr[0] * s + x * d, v[1] * c + cr[1] * s + y * d, v[2] * c + cr[2] * s + z * d]; };
+  ok(all.length === 24 && all.every((r) => { const a = rod(axisAngle(r), [1, 2, 3]), b = oapply(r, [1, 2, 3]); return a.every((c, i) => near(c, b[i], 1e-9)); }), "sens : les 24 rotations passent au noyau sans erreur", all.length);
+  ok(osame(oread([0, 2, 0, 1, 0, 0, 0, 0, 1]), IDENT) && osame(oread("x"), IDENT) && osame(oread(MOVES.cote), MOVES.cote), "sens : une orientation abîmée dans un fichier redevient « droite »");
+  ok(POSES.length === 6 && new Set(POSES.map((p) => orientedBox([[0, 0, 0], [1, 2, 3]], p).size.join())).size === 6, "sens : les 6 poses donnent 6 encombrements différents");
   const kallax = findFurniture("kallax").size;
   let r = fitCheck([60, 30, 200], kallax);
   ok(r.fits && near(r.rest[0], 275) && near(r.rest[1], 360) && near(r.rest[2], 135) && r.count.join() === "5,13,1" && r.total === 65, "meuble : 60 × 30 × 200 rentre dans une case Kallax, 65 exemplaires", r);
-  ok(near(r.grow(0), 1.675) && near(r.grow(1), 1.67), "meuble : elle peut grandir jusqu'à 167 % (1 mm de jeu)", [r.grow(0), r.grow(1)]);
+  ok(near(r.grow(0), 1.675) && near(r.grow(1), 1.67) && near(r.grow(0, [2]), 335 / 60) && r.grow(0, [0, 1, 2]) === Infinity, "meuble : elle peut grandir jusqu'à 167 %, ou plus si la hauteur est déjà remplie", [r.grow(0), r.grow(1)]);
   r = fitCheck([60, 30, 400], kallax); ok(!r.fits && near(r.rest[2], -65) && r.total === 0, "meuble : 400 mm de haut ne rentre pas, il manque 65 mm");
   r = fitCheck([335, 390, 335], kallax); ok(r.fits && r.total === 1, "meuble : une pièce exactement à la taille de la case rentre");
-  let b = bestOrient([[0, 0, 0], [60, 30, 380]], kallax, { up: 2, turn: 0 });
-  ok(b.fits && b.o.up === 1 && rotatedBox([[0, 0, 0], [60, 30, 380]], b.o).size[1] === 380, "meuble : trop haute debout, le bon sens la couche dans la profondeur", b);
-  b = bestOrient([[0, 0, 0], [500, 500, 500]], kallax, { up: 2, turn: 0 }); ok(!b.fits, "meuble : un cube de 500 ne rentre dans aucun sens");
-  ok(FURNITURE.flatMap((g) => g.items).every((it) => it.size.length === 3 && it.size.every((v) => v > 10 && v < 3000)) && new Set(FURNITURE.flatMap((g) => g.items.map((it) => it.key))).size === FURNITURE.flatMap((g) => g.items).length, "meuble : chaque rangement a trois dimensions plausibles et une clé unique");
+  r = fitCheck([600, 300, 5000], [1200, 600, 1000], true); ok(r.fits && r.count.join() === "2,2,1" && near(r.grow(0), 2), "meuble : sur un plateau, la hauteur ne compte pas", r);
+  let b = bestOrient([[0, 0, 0], [60, 30, 380]], kallax);
+  ok(b.fits && !b.same && orientedBox([[0, 0, 0], [60, 30, 380]], b.m).size[1] === 380, "meuble : trop haute debout, le bon sens la couche dans la profondeur", b);
+  b = bestOrient([[0, 0, 0], [500, 500, 500]], kallax); ok(!b.fits, "meuble : un cube de 500 ne rentre dans aucun sens");
+  b = bestOrient([[0, 0, 0], [60, 30, 100]], kallax); ok(b.fits && b.m !== IDENT, "meuble : le bon sens est celui où on en range le plus");
+  // placer et aimant
+  ok(placeAt(0, 335, 60) === 0 && placeAt(100, 335, 60) === 275 && near(placeAt(50, 335, 60), 137.5) && near(placeAt(25, 400, 100), 50) && placeAt(5, 400, 100) === 0, "placer : 0 % à gauche, 100 % à droite, 50 % au centre, jamais à travers la paroi");
+  ok(placeAt(50, 100, 160) === -30 && placeAt(50, 100, 160, true) === -60, "placer : trop grande, elle est centrée (ou poussée au fond)");
+  ok(magnet(4, 335, 60, 10).join() === "0,0" && magnet(270, 335, 60, 10).join() === "275,100" && magnet(140, 335, 60, 10).join() === "137.5,50" && magnet(80, 335, 60, 10).join() === "80," , "aimant : colle à gauche, à droite et au centre, sinon laisse libre", magnet(80, 335, 60, 10));
+  const items = FURNITURE.flatMap((g) => g.items);
+  ok(items.every((it) => it.size.length === 3 && it.size.every((v) => v > 10 && v < 3000)) && new Set(items.map((it) => it.key)).size === items.length, "meuble : chaque modèle a 3 dimensions plausibles et une clé unique");
+  const ikea = STORES.find((x) => x.key === "ikea");
+  ok(ikea.types.length === 5 && ikea.types.reduce((n, t) => n + t.items.length, 0) >= 50 && ikea.types.find((t) => t.key === "bureaux").items.every((it) => it.kind === "top" && isOpenKind(it.kind)), "meuble : IKEA a 5 types, au moins 50 modèles, et des bureaux sans limite de hauteur");
 }
 console.log(fails ? `ÉCHECS ${fails}` : "TOUT OK");

@@ -96,6 +96,8 @@ SolidWorks coûte plusieurs milliers d’euros par an, ne tourne que sur un PC W
 | Versions enregistrées avec retour en arrière | Historique sans logiciel de gestion de données | ✅ v0.7 |
 | Essai dans un meuble (case Kallax, niveau de Billy, bac, meuble sur mesure) : la pièce rentre-t-elle, combien on en range, jusqu’où l’agrandir | Dans SolidWorks il faut modéliser le meuble et faire un assemblage ; ici c’est un bouton | ✅ v1.5 |
 | Pas du quadrillage réglable jusqu’à 0,01 mm, commun au sol, aux flèches, aux boutons − et + et au dessin | Un seul réglage, visible à côté de la vue | ✅ v1.5 |
+| Tourner toute la pièce en un clic : quart de tour, demi-tour, la coucher, tête en bas, miroir | Des mots simples au lieu d’angles et d’axes à saisir | ✅ v1.5.1 |
+| Dans le meuble : aimant (parois, milieu, pourcentage), « Remplir » la largeur, la profondeur ou la hauteur, catalogue par magasin (53 modèles IKEA : étagères, bureaux, tablettes, tiroirs, boîtes) | Aucun équivalent dans SolidWorks | ✅ v1.5.1 |
 | Bibliothèque de pièces standard paramétriques (vis, écrous, rondelles, roulements) | Sans abonnement à une bibliothèque | 🗓️ |
 | Assistant qui repère les problèmes (paroi trop fine pour l’impression, trou trop près du bord) | Conseils avant d’imprimer | 🗓️ |
 | Travail à plusieurs en direct | Sans serveur payant : à étudier (pair à pair) | 🗓️ |

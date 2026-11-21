@@ -654,10 +654,29 @@ export class Viewer {
       const geo = new THREE.BoxGeometry(sx, sy, sz); const m = new THREE.Mesh(geo, wood); m.position.set(x, y, z); m.userData.own = true; m.renderOrder = 3;
       const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), line); e.position.copy(m.position); e.userData.own = true; g.add(m, e);
     };
-    board(W + 2 * t, D, t, 0, 0, -t / 2); board(W + 2 * t, D, t, 0, 0, H + t / 2); // dessous, dessus
-    board(t, D, H, -W / 2 - t / 2, 0, H / 2); board(t, D, H, W / 2 + t / 2, 0, H / 2); // côtés
-    if (spec.back) board(W + 2 * t, t / 3, H + 2 * t, 0, D / 2 + t / 6, H / 2); // fond
-    const q = new THREE.Quaternion(...spec.quat);
+    const kind = spec.kind || "case";
+    let top = H + t, side = t, rear = t;
+    if (kind === "top" || kind === "shelf") {
+      // un plateau de bureau ou une tablette : une planche, avec le mur derrière pour la tablette
+      const e = Math.max(4, Math.min(34, Math.min(W, D) / 14)); const wallH = Math.min(W, 420) * 0.6;
+      board(W, D, e, 0, 0, -e / 2);
+      if (kind === "shelf") board(W + 2 * e, e / 3, wallH + e, 0, D / 2 + e / 6, (wallH - e) / 2);
+      top = kind === "shelf" ? wallH : 0; side = 0; rear = kind === "shelf" ? e : 0;
+      g.userData.under = e;
+    } else if (kind === "box") {
+      // une boîte, un bac ou un tiroir : un fond et quatre parois, ouvert dessus
+      const e = Math.max(0.5, Math.min(6, Math.min(W, D, H) / 14));
+      board(W + 2 * e, D + 2 * e, e, 0, 0, -e / 2);
+      board(e, D + 2 * e, H, -W / 2 - e / 2, 0, H / 2); board(e, D + 2 * e, H, W / 2 + e / 2, 0, H / 2);
+      board(W, e, H, 0, -D / 2 - e / 2, H / 2); board(W, e, H, 0, D / 2 + e / 2, H / 2);
+      top = H; side = e; rear = e; g.userData.under = e;
+    } else {
+      board(W + 2 * t, D, t, 0, 0, -t / 2); board(W + 2 * t, D, t, 0, 0, H + t / 2); // dessous, dessus
+      board(t, D, H, -W / 2 - t / 2, 0, H / 2); board(t, D, H, W / 2 + t / 2, 0, H / 2); // côtés
+      if (spec.back) board(W + 2 * t, t / 3, H + 2 * t, 0, D / 2 + t / 6, H / 2); // fond
+      g.userData.under = t;
+    }
+    const q = new THREE.Quaternion();
     this.part.quaternion.copy(q); this.part.position.set(...spec.pos);
     this.mat.color.set(spec.ok ? 0xc3ccd7 : 0xe9968a);
     if (spec.copies?.length && this.geo) {
@@ -670,7 +689,7 @@ export class Viewer {
       im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.frustumCulled = false; g.add(im);
     }
     this.furn = g; this.scene.add(g);
-    this.furnBox = new THREE.Box3(new THREE.Vector3(-W / 2 - t, -D / 2, -t), new THREE.Vector3(W / 2 + t, D / 2 + t, H + t));
+    this.furnBox = new THREE.Box3(new THREE.Vector3(-W / 2 - side, -D / 2 - (kind === "box" ? side : 0), -g.userData.under), new THREE.Vector3(W / 2 + side, D / 2 + rear, top));
     this.updateGround();
   }
   // ---------- Assemblage : un groupe par composant ----------

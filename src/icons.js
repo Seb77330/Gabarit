@@ -14,6 +14,8 @@ export const ICONS = {
   stand: s('<rect x="8" y="2.5" width="8.5" height="14" rx="1.5" transform="rotate(12 12 9.5)"/><path d="M4 21h16"/><path d="M7 21l1.5-4"/>'),
   scale: s('<rect x="3" y="11" width="10" height="10" rx="1.5"/><path d="M8 7V4.5A1.5 1.5 0 0 1 9.500 3H19.500A1.500 1.500 0 0 1 21 4.500V14.500A1.500 1.500 0 0 1 19.500 16H17" stroke-dasharray="2.4 2.4"/><path d="M14 10l4-4M14.500 6H18v3.500"/>'),
   stretch: s('<path d="M6 3v18M18 3v18" stroke-dasharray="2.6 2.4"/><path d="M9 12h6"/><path d="M11 9.6 8.6 12l2.4 2.4M13 9.6l2.4 2.4-2.4 2.4"/>'),
+  orient: s('<path d="M12 8.5l5 2.6v5.6l-5 2.8-5-2.8v-5.6z"/><path d="M12 14v5.5M7 11.1l5 2.9 5-2.9"/><path d="M4.500 8A8.500 8.500 0 0 1 19 5.200"/><path d="M19.300 1.800v3.600h-3.600"/>'),
+  fill: s('<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2.4 2.4"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 12H5.500M7 10.500L5.500 12 7 13.500M15 12h3.500M17 10.500l1.500 1.500-1.500 1.500M12 9V5.500M10.500 7L12 5.500 13.500 7"/>'),
   slice: s('<path d="M5 14.5V9l7-3.5L19 9v5.5"/><path d="M2.5 14.5h19"/><path d="M5 17.5l7 3 7-3" stroke-dasharray="2 2.4"/>'),
   shell: s('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M7 8.5l5-2.5 5 2.5v7l-5 2.5-5-2.5z"/>'),
   mirror: s('<path d="M12 3v18" stroke-dasharray="2 2"/><path d="M9 6 4 18h5z"/><path d="M15 6l5 12h-5z"/>'),
