@@ -57,11 +57,11 @@ const { chromium } = require("playwright");
   // barre d'outils Simple : tout tient sur un écran de portable
   await p.setViewportSize({ width: 1280, height: 720 }); await p.waitForTimeout(400);
   const fit = await G(() => { const t = document.querySelector("#tools"); return [t.scrollWidth, t.clientWidth, [...t.querySelectorAll(".tbtn")].every((b) => b.getBoundingClientRect().right <= window.innerWidth + 0.5)]; });
-  ok(fit[2] && fit[0] <= fit[1] + 1, "barre Simple (15 outils) : tout tient à 1280 px de large (" + fit.join(" ; ") + ")");
+  ok(fit[2] && fit[0] <= fit[1] + 1, "barre Simple (16 outils) : tout tient à 1280 px de large (" + fit.join(" ; ") + ")");
   await p.screenshot({ path: TMP + "/shots/v11-simple-1280.png" });
   await p.click("#modeSw [data-mode=expert]"); await p.waitForTimeout(400);
   const fit2 = await G(() => { const t = document.querySelector("#tools"); return [t.scrollWidth, t.clientWidth, [...t.querySelectorAll(".tbtn")].every((b) => b.getBoundingClientRect().right <= window.innerWidth + 0.5), t.querySelectorAll(".tbtn").length]; });
-  ok(fit2[3] === 24 && (fit2[2] || fit2[0] > fit2[1]), "barre Expert (24 outils) à 1280 px : tout tient, ou la barre défile (" + fit2.join(" ; ") + ")");
+  ok(fit2[3] === 25 && (fit2[2] || fit2[0] > fit2[1]), "barre Expert (25 outils) à 1280 px : tout tient, ou la barre défile (" + fit2.join(" ; ") + ")");
   await p.screenshot({ path: TMP + "/shots/v11-expert-1280.png" });
   console.log("erreurs", logs);
   ok(!logs.length, "aucune erreur dans la console");

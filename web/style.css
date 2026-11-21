@@ -67,6 +67,10 @@ dialog .db { -webkit-user-select: text; user-select: text; }
 .tabs { display: flex; align-items: flex-end; gap: 3px; padding: 2px 12px 0; background: var(--top); overflow-x: auto; min-height: 34px; scrollbar-width: none; }
 .tab { display: flex; align-items: center; gap: 6px; max-width: 230px; padding: 6px 6px 6px 13px; background: #ffffff0f; border-radius: 9px 9px 0 0; font-size: 13px; color: var(--top-ink); opacity: .72; cursor: pointer; white-space: nowrap; transition: background .12s, opacity .12s; }
 .tab .nm { overflow: hidden; text-overflow: ellipsis; }
+.tab .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: -1px; }
+.closeask .sub { font-size: 12.5px; color: var(--ink3, var(--ink2)); margin: 2px 0 6px; }
+.closeask .check { padding: 6px 0; }
+.closeask .field input { width: 100%; }
 .tab:hover:not(.on) { background: #ffffff1c; opacity: 1; }
 .tab.on { background: var(--card); color: var(--ink); opacity: 1; font-weight: 650; padding-bottom: 7px; }
 .tab .x { border: 0; background: none; width: 20px; height: 20px; border-radius: 5px; font-size: 10.5px; color: inherit; opacity: .55; cursor: pointer; padding: 0; }
@@ -75,12 +79,12 @@ dialog .db { -webkit-user-select: text; user-select: text; }
 .tab-new:hover { background: #ffffff1c; opacity: 1; }
 
 /* ---------- Barre d'outils ---------- */
-.tools { display: flex; gap: 0; padding: 6px 8px 4px; background: var(--card); border-bottom: 1px solid var(--line); overflow-x: auto; box-shadow: 0 1px 0 #0000000a; position: relative; z-index: 3; }
-.tgroup { display: flex; flex-direction: column; padding: 0 7px; border-right: 1px solid var(--line); }
+.tools { display: flex; gap: 0; padding: 6px 6px 4px; background: var(--card); border-bottom: 1px solid var(--line); overflow-x: auto; box-shadow: 0 1px 0 #0000000a; position: relative; z-index: 3; }
+.tgroup { display: flex; flex-direction: column; padding: 0 5px; border-right: 1px solid var(--line); }
 .tgroup:last-child { border-right: 0; }
 .trow { display: flex; gap: 1px; }
 .tcap { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); text-align: center; padding: 2px 0 1px; opacity: .85; }
-.tbtn { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 56px; padding: 4px 5px 4px; border: 1px solid transparent; background: none; border-radius: 10px; font-size: 11.5px; font-weight: 500; color: var(--ink2); white-space: nowrap; transition: background .12s, color .12s, border-color .12s; }
+.tbtn { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 53px; padding: 4px 4px 4px; border: 1px solid transparent; background: none; border-radius: 10px; font-size: 11.5px; font-weight: 500; color: var(--ink2); white-space: nowrap; transition: background .12s, color .12s, border-color .12s; }
 .tbtn span { display: grid; place-items: center; width: 30px; height: 28px; border-radius: 8px; transition: transform .12s, color .12s; }
 .tbtn svg { width: 23px; height: 23px; }
 .tbtn:hover { background: var(--hover); color: var(--ink); }
@@ -209,6 +213,9 @@ body.simple .params-box, body.simple .rollbar, body.simple .xp { display: none; 
 .field { padding: 5px 14px; display: grid; gap: 4px; }
 .field > label { font-size: 12px; color: var(--ink2); font-weight: 500; }
 .field .in { display: flex; align-items: center; gap: 6px; }
+.stepb { flex: none; width: 26px; height: 30px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink2); font-size: 16px; line-height: 1; font-weight: 600; cursor: pointer; padding: 0; touch-action: none; -webkit-user-select: none; user-select: none; }
+.stepb:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.stepb:active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .field input[type=text], .field select { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; background: var(--field); min-width: 0; transition: border-color .12s, box-shadow .12s, background .12s; }
 .field input[type=text]:hover, .field select:hover { border-color: var(--line2); }
 .field input[type=text]:focus, .field select:focus { outline: none; border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -471,12 +478,13 @@ table.bom th { font-weight: 650; background: var(--field); }
 @media (max-width: 1500px) { .top .search kbd { display: none; } }
 @media (max-width: 1560px) { .tools .tbtn { min-width: 50px; padding: 4px 3px; } .tgroup { padding: 0 4px; } }
 @media (max-width: 1420px) { .file button { padding: 4px 7px; font-size: 13px; } .top { gap: 8px; } }
-@media (max-width: 1400px) {
+@media (max-width: 1500px) {
   body:not(.simple) .tools .tbtn { min-width: 44px; padding: 4px 1px; font-size: 11px; }
   .tgroup { padding: 0 3px; }
   body.simple .tools .tbtn { min-width: 70px; padding: 6px 3px 5px; }
   body.simple .tgroup { padding: 0 3px; }
 }
+@media (max-width: 1300px) { body.simple .tools { padding: 8px 4px 5px; } body.simple .tools .tbtn { min-width: 64px; padding: 6px 1px 5px; font-size: 12px; } body.simple .tgroup { padding: 0 2px; } }
 @media (max-width: 900px) {
   main, main.asm { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 1fr) auto auto; overflow: auto; }
   main > .tree, main > .props, main > .stage, main.asm > .props { grid-column: 1; grid-row: auto; }
@@ -545,3 +553,27 @@ table.bom th { font-weight: 650; background: var(--field); }
 .note.err .fixes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .note.err .fixes .btn { font-size: 12px; padding: 5px 10px; }
 .busy.long { color: var(--ink); border-color: var(--accent); }
+
+/* Parties allongées */
+.zcard { margin: 6px 14px 8px; padding: 10px 0 4px; border: 1.5px solid var(--accent); border-radius: 12px; background: var(--card); }
+.zcard .zt { display: flex; align-items: center; justify-content: space-between; padding: 0 12px 4px 14px; font-size: 13px; }
+.zcard .zt .x { border: 0; background: none; width: 24px; height: 24px; border-radius: 6px; color: var(--muted); cursor: pointer; }
+.zcard .zt .x:hover { background: #7f7f7f22; color: var(--err); }
+.zcard .zpos { padding: 2px 14px 4px; font-size: 12px; color: var(--muted); }
+.zrow { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; width: calc(100% - 28px); margin: 6px 14px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 13px; cursor: pointer; text-align: left; color: var(--ink); }
+.zrow:hover { border-color: var(--accent); }
+.zrow span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* Aide des gestes, en bas à gauche de la vue */
+.gestes { position: absolute; left: 12px; bottom: 12px; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; max-width: min(820px, calc(100% - 380px)); padding: 6px 30px 6px 8px; background: var(--glass); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-s); backdrop-filter: blur(6px); font-size: 12.5px; color: var(--ink2); animation: fadeup .18s ease-out; }
+.gestes .g { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 5px; border-radius: 8px; background: var(--card); border: 1px solid var(--line); white-space: nowrap; }
+.gestes i { display: grid; place-items: center; width: 20px; height: 20px; color: var(--accent); font-style: normal; flex: none; }
+.gestes i svg { width: 18px; height: 18px; }
+.gestes .x { position: absolute; right: 5px; top: 5px; border: 0; background: none; color: var(--muted); font-size: 11px; width: 22px; height: 22px; border-radius: 6px; cursor: pointer; }
+.gestes .x:hover { background: var(--hover); color: var(--ink); }
+.gestes.mini { padding: 5px 11px 5px 7px; gap: 5px; cursor: pointer; font-weight: 600; }
+.gestes.mini:hover { border-color: var(--accent); color: var(--accent-ink); }
+@media (max-width: 900px) { .gestes { max-width: calc(100% - 24px); } .gestes .g { white-space: normal; } }
+.views button.wide { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; font-weight: 600; }
+.views button.wide i { display: inline-flex; width: 16px; height: 16px; }
+.views button.wide i svg { width: 16px; height: 16px; }

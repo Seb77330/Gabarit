@@ -12,6 +12,8 @@ export const ICONS = {
   tray: s('<path d="M3 8l2.5 11h13L21 8"/><path d="M3 8h18"/><path d="M8 12.5h8"/>'),
   hook: s('<path d="M8 3v11a4.5 4.5 0 0 0 9 0v-2"/><circle cx="8" cy="5.5" r="0.4"/><circle cx="8" cy="9.5" r="0.4"/>'),
   stand: s('<rect x="8" y="2.5" width="8.5" height="14" rx="1.5" transform="rotate(12 12 9.5)"/><path d="M4 21h16"/><path d="M7 21l1.5-4"/>'),
+  scale: s('<rect x="3" y="11" width="10" height="10" rx="1.5"/><path d="M8 7V4.5A1.5 1.5 0 0 1 9.500 3H19.500A1.500 1.500 0 0 1 21 4.500V14.500A1.500 1.500 0 0 1 19.500 16H17" stroke-dasharray="2.4 2.4"/><path d="M14 10l4-4M14.500 6H18v3.500"/>'),
+  stretch: s('<path d="M6 3v18M18 3v18" stroke-dasharray="2.6 2.4"/><path d="M9 12h6"/><path d="M11 9.6 8.6 12l2.4 2.4M13 9.6l2.4 2.4-2.4 2.4"/>'),
   slice: s('<path d="M5 14.5V9l7-3.5L19 9v5.5"/><path d="M2.5 14.5h19"/><path d="M5 17.5l7 3 7-3" stroke-dasharray="2 2.4"/>'),
   shell: s('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M7 8.5l5-2.5 5 2.5v7l-5 2.5-5-2.5z"/>'),
   mirror: s('<path d="M12 3v18" stroke-dasharray="2 2"/><path d="M9 6 4 18h5z"/><path d="M15 6l5 12h-5z"/>'),
@@ -61,6 +63,14 @@ export const ICONS = {
   pro: s('<circle cx="12" cy="5.5" r="2"/><path d="M11 7.5 6 20M13 7.5 18 20M8.3 15h7.4"/>'),
   flag: s('<path d="M6 21V4"/><path d="M6 4.5h10.5l-2 3.75 2 3.75H6"/>'),
   check: s('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+  // aides de gestes : souris (bouton gauche, bouton droit, molette), flèche à tirer, arc, touche, chiffres
+  mouseL: s('<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7M6 10h12"/><path d="M6 10V9a6 6 0 0 1 6-6v7z" fill="currentColor" stroke="none"/>'),
+  mouseR: s('<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7M6 10h12"/><path d="M18 10V9a6 6 0 0 0-6-6v7z" fill="currentColor" stroke="none"/>'),
+  wheel: s('<rect x="6" y="3" width="12" height="18" rx="6"/><rect x="10.8" y="5.5" width="2.4" height="6" rx="1.2" fill="currentColor" stroke="none"/>'),
+  pull: s('<path d="M5 19 18 6"/><path d="M10.5 5.5h8v8"/>'),
+  turn: s('<path d="M5 19A14 14 0 0 1 19 5"/><circle cx="5" cy="19" r="1.7" fill="currentColor"/><circle cx="19" cy="5" r="1.7" fill="currentColor"/>'),
+  keycap: s('<rect x="3" y="6.5" width="18" height="11" rx="2.5"/><path d="M7.5 13.5h9"/>'),
+  digits: s('<rect x="3" y="6" width="18" height="12" rx="3"/><path d="M8 10v4M12 10v4M16 10v4"/>'),
   bulb: s('<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1.1 2.2h5c.1-1 .5-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>'),
 };
 // Dessins des formes prêtes.

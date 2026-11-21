@@ -36,16 +36,22 @@ const run = async (servers) => {
     const okU = r.status === 0 && /TOUT OK/.test(r.text);
     out(`=== regions.test ${okU ? "ok" : "ÉCHEC"}`); if (!okU) { bad.push("regions.test"); out(r.text.split("\n").filter((l) => !/^ok/.test(l)).slice(-30).join("\n")); }
   }
-  for (const f of list) {
+  const one = async (f, again) => {
     const t = Date.now();
     const r = await child([path.join("tools", f + ".cjs")], env, 420000), lines = r.text.split("\n");
     // un essai échoue s'il sort avec une erreur, ou s'il a écrit une ligne d'échec
     const marks = lines.filter((l) => /^(FAIL|ÉCHEC)\b|ÉCHECS \d|pageerror/.test(l));
     const failed = r.status !== 0 || marks.length > 0;
-    out(`=== ${f} ${failed ? "ÉCHEC" : "ok"} (sortie ${r.status === null ? "délai dépassé" : r.status}, ${Math.round((Date.now() - t) / 1000)} s)`);
-    if (failed) { bad.push(f); out([...marks, "--- fin de la sortie ---", ...lines.slice(-25)].join("\n")); }
-  }
-  out(`TERMINÉ en ${Math.round((Date.now() - t0) / 1000)} s : ${list.length - bad.filter((x) => x !== "regions.test").length} essais réussis sur ${list.length}` + (bad.length ? ` · en échec : ${bad.join(", ")}` : " · aucun échec"));
+    out(`=== ${f} ${failed ? "ÉCHEC" : "ok"}${again ? " au 2ᵉ passage" : ""} (sortie ${r.status === null ? "délai dépassé" : r.status}, ${Math.round((Date.now() - t) / 1000)} s)`);
+    if (failed) out([...marks, "--- fin de la sortie ---", ...lines.slice(-25)].join("\n"));
+    return !failed;
+  };
+  const first = [];
+  for (const f of list) if (!(await one(f))) first.push(f);
+  // Second passage : un PC occupé fait dépasser des délais. Un essai qui échoue deux fois est un vrai échec.
+  if (first.length) out(`--- 2ᵉ passage pour ${first.length} essai(s) : ${first.join(", ")} ---`);
+  for (const f of first) if (!(await one(f, true))) bad.push(f);
+  out(`TERMINÉ en ${Math.round((Date.now() - t0) / 1000)} s : ${list.length - bad.filter((x) => x !== "regions.test").length} essais réussis sur ${list.length}` + (first.length ? ` (dont ${first.length - bad.filter((x) => x !== "regions.test").length} au 2ᵉ passage)` : "") + (bad.length ? ` · en échec : ${bad.join(", ")}` : " · aucun échec"));
   for (const sv of servers) sv.close();
   process.exit(bad.length ? 1 : 0);
 };

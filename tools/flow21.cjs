@@ -84,9 +84,11 @@ const fs = require("fs");
   // par l'interface : bouton, deux clics sur la pièce, valeur tapée
   await setImp({ zone: null });
   await p.click("#tree >> text=barre"); await p.waitForTimeout(400);
-  await p.click("#props [data-zone=add]"); await p.waitForTimeout(300);
+  // depuis la v1.4, le fichier importé renvoie vers l'outil « Allonger une partie » ; l'ancienne zone d'un fichier déjà enregistré reste réglable
+  ok(await p.isVisible("#props [data-zone=tool]"), "fichier importé : bouton « Allonger une partie » vers le nouvel outil");
+  await setImp({ zone: { axis: "x", a: "32", b: "48", add: "0" } });
+  await p.click("#tree >> text=barre"); await p.waitForTimeout(400);
   let z = (await imp()).zone;
-  ok(z && z.axis === "x" && z.a === "32" && z.b === "48" && z.add === "0", "bouton « Allonger seulement une zone » : zone proposée au milieu de la longueur (" + JSON.stringify(z) + ")");
   await p.click("#props >> text=Choisir sur la pièce"); await p.waitForTimeout(200);
   pt = await world([-15, -10, 5]); await p.mouse.click(pt[0], pt[1] - 1); await p.waitForTimeout(300);
   pt = await world([12, -10, 5]); await p.mouse.click(pt[0], pt[1] - 1); await p.waitForTimeout(500);

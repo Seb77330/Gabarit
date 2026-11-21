@@ -37,9 +37,10 @@ const { chromium } = require("playwright");
   // rectangle depuis le centre
   await p.click(".sk-tools [data-sk=rect]");
   await p.click("#skMethod [data-m=rectc]");
-  await click([20, -2]); await click([26, 1]);
+  // loin du cercle tracé juste avant : depuis la v1.3, un point posé tout près d'un cercle s'accroche dessus
+  await click([20, -12]); await click([26, -9]);
   E = await ents(); let r = E.at(-1);
-  ok(r.type === "rect" && r.cx === 20 && r.cy === -2 && r.w === 12 && r.h === 6, "rectangle depuis le centre : " + JSON.stringify(r));
+  ok(r.type === "rect" && r.cx === 20 && r.cy === -12 && r.w === 12 && r.h === 6, "rectangle depuis le centre : " + JSON.stringify(r));
   // rectangle 3 points incliné
   await p.click("#skMethod [data-m=rect3]");
   await click([0, -12]); await click([8, -6]); await click([5, -1]);
