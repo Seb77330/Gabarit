@@ -1,6 +1,6 @@
 import { arrange, faceAt, insidePoint, sagArc, sagOf, splitAll } from "../src/regions.js";
 import { cornerFillet, roundCorners, outline, polyArea } from "../src/geo.js";
-import { FURNITURE, STORES, findFurniture, isOpenKind, fitCheck, bestOrient, placeAt, magnet } from "../src/furniture.js";
+import { FURNITURE, STORES, findFurniture, isOpenKind, fitCheck, bestOrient, placeAt, magnet, packFit, gridCells } from "../src/furniture.js";
 import { IDENT, MOVES, POSES, omul, odet, oapply, osame, oread, axisAngle, orientedBox } from "../src/orient.js";
 let fails = 0; const ok = (c, m, x) => { console.log((c ? "ok : " : "ÉCHEC : ") + m + (x !== undefined ? " → " + JSON.stringify(x) : "")); if (!c) fails++; };
 const near = (a, b, t = 1e-3) => Math.abs(a - b) < t;
@@ -79,9 +79,16 @@ ar = arrange([{ type: "path", pts: [[0, 0], [20, 0, 0, 4], [20, 10]] }, { type: 
   ok(placeAt(0, 335, 60) === 0 && placeAt(100, 335, 60) === 275 && near(placeAt(50, 335, 60), 137.5) && near(placeAt(25, 400, 100), 50) && placeAt(5, 400, 100) === 0, "placer : 0 % à gauche, 100 % à droite, 50 % au centre, jamais à travers la paroi");
   ok(placeAt(50, 100, 160) === -30 && placeAt(50, 100, 160, true) === -60, "placer : trop grande, elle est centrée (ou poussée au fond)");
   ok(magnet(4, 335, 60, 10).join() === "0,0" && magnet(270, 335, 60, 10).join() === "275,100" && magnet(140, 335, 60, 10).join() === "137.5,50" && magnet(80, 335, 60, 10).join() === "80," , "aimant : colle à gauche, à droite et au centre, sinon laisse libre", magnet(80, 335, 60, 10));
+  // en ranger plusieurs, Gridfinity
+  let pk = packFit([100, 100, 50], [335, 390, 335], 3); ok(pk.k >= 1 && near(pk.k, Math.min(335 / 200, 390 / 200)) && pk.a * pk.b >= 3, "ranger : 3 pièces de 100 tiennent, et peuvent grandir", pk);
+  pk = packFit([200, 100, 50], [335, 390, 335], 3, 1); ok(near(pk.k, 389 / 300) && pk.a === 1 && pk.b === 3, "ranger : 3 pièces larges se mettent l'une derrière l'autre, 1 mm de jeu compris", pk);
+  pk = packFit([300, 300, 50], [335, 390, 335], 4); ok(pk.k < 1 && near(pk.k, Math.min(335 / 600, 390 / 600)), "ranger : 4 grandes pièces doivent être réduites", pk);
+  pk = packFit([100, 100, 5000], [1200, 600, 1000], 2, 0, true); ok(near(pk.k, 6), "ranger : sur un plateau la hauteur ne limite pas", pk);
+  ok(gridCells([338, 520, 70]).join() === "8,12" && gridCells([41, 100, 10]).join() === "0,2" && gridCells([84, 84, 10]).join() === "2,2", "Gridfinity : 8 × 12 cases dans un tiroir Maximera de 40 cm");
+  ok(findFurniture("maximera60bas").size.join() === "538,520,70" && findFurniture("maximera80p37").size.join() === "738,290,70", "meuble : tiroirs Metod de 60 et de 80 cm");
   const items = FURNITURE.flatMap((g) => g.items);
   ok(items.every((it) => it.size.length === 3 && it.size.every((v) => v > 10 && v < 3000)) && new Set(items.map((it) => it.key)).size === items.length, "meuble : chaque modèle a 3 dimensions plausibles et une clé unique");
   const ikea = STORES.find((x) => x.key === "ikea");
-  ok(ikea.types.length === 5 && ikea.types.reduce((n, t) => n + t.items.length, 0) >= 50 && ikea.types.find((t) => t.key === "bureaux").items.every((it) => it.kind === "top" && isOpenKind(it.kind)), "meuble : IKEA a 5 types, au moins 50 modèles, et des bureaux sans limite de hauteur");
+  ok(ikea.types.length === 6 && ikea.types.reduce((n, t) => n + t.items.length, 0) >= 50 && ikea.types.find((t) => t.key === "bureaux").items.every((it) => it.kind === "top" && isOpenKind(it.kind)), "meuble : IKEA a 6 types, au moins 50 modèles, et des bureaux sans limite de hauteur");
 }
 console.log(fails ? `ÉCHECS ${fails}` : "TOUT OK");

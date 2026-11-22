@@ -45,6 +45,10 @@ export const STORES = [
       { key: "malm80", name: "Malm 80 cm, un tiroir", size: [720, 430, 140], kind: "box", src: "pub" },
       box("alex36", "Alex 36 × 70 cm, un tiroir", [270, 520, 90]),
     ] },
+    { key: "cuisine", name: "Tiroirs de cuisine Metod", items: [
+      ...[400, 600, 800].flatMap((w) => [["bas", 70], ["moyen", 130], ["haut", 200]].map(([n, hh]) => box(`maximera${w / 10}${n}`, `Maximera ${w / 10} × 60 cm, tiroir ${n}`, [w - 62, 520, hh]))),
+      ...[400, 600, 800].map((w) => box(`maximera${w / 10}p37`, `Maximera ${w / 10} × 37 cm, tiroir bas`, [w - 62, 290, 70])),
+    ] },
     { key: "boites", name: "Boîtes et bacs", items: [
       box("trofast10", "Trofast 42 × 30 × 10 cm", [360, 240, 90]), box("trofast23", "Trofast 42 × 30 × 23 cm", [360, 240, 220]), box("trofast36", "Trofast 42 × 30 × 36 cm", [360, 240, 350]),
       box("trofast20", "Trofast 20 × 30 × 10 cm", [150, 240, 90]),
@@ -105,6 +109,20 @@ export function bestOrient(bb, room, open = false) {
   });
   return best;
 }
+// Ranger n pièces identiques côte à côte, sur un seul niveau : la plus grande taille (1 = taille actuelle) à
+// laquelle les n tiennent, et la grille (a de front, b en profondeur) qui le permet.
+export function packFit(size, room, n, jeu = 0, open = false) {
+  let best = null;
+  for (let a = 1; a <= n; a++) {
+    const b = Math.ceil(n / a);
+    const k = Math.min((room[0] - jeu) / (a * size[0]), (room[1] - jeu) / (b * size[1]), open ? Infinity : (room[2] - jeu) / size[2]);
+    if (!best || k > best.k + 1e-9) best = { k, a, b };
+  }
+  return best;
+}
+// Combien de cases Gridfinity (42 mm) tiennent dans un intérieur.
+export const gridCells = (room) => [Math.floor((room[0] + 1e-6) / 42), Math.floor((room[1] + 1e-6) / 42)];
+
 // Où poser la pièce le long d'un sens : « at » en % (le milieu de la pièce à ce pourcentage de l'intérieur),
 // sans jamais traverser une paroi. Si elle est trop grande, elle est centrée (ou poussée au fond avec « push »).
 export function placeAt(at, room, size, push = false) {
@@ -121,10 +139,14 @@ export function magnet(pos, room, size, near) {
 
 // ---------- Panneau ----------
 const PREF = "gabarit-meuble", MINE = "gabarit-meubles";
-const TABS = [["meuble", "Meuble"], ["tourner", "Tourner"], ["placer", "Placer"], ["remplir", "Taille et remplissage"]];
+const TABS = [["meuble", "Meuble"], ["tourner", "Tourner"], ["placer", "Placer"], ["remplir", "Taille et remplissage"], ["rangements", "Rangements"]];
+// Idées de rangements à chercher sur les sites de modèles : [nom affiché, mots cherchés].
+const IDEAS = [["Bacs Gridfinity", "gridfinity bin"], ["Grilles Gridfinity", "gridfinity baseplate"], ["Range-couverts", "cutlery tray drawer"], ["Organisateur de tiroir de cuisine", "kitchen drawer organizer"],
+  ["Porte-épices", "spice rack"], ["Boîtes empilables", "stackable storage box"], ["Organisateur de bureau", "desk organizer"], ["Multiboard", "multiboard"], ["Panneau perforé Skådis", "skadis"],
+  ["Range-câbles", "cable organizer"], ["Porte-éponge", "sponge holder"], ["Boîte à piles", "battery holder"]];
 export function createFurniture(ctx) {
   const { h, $, fr, nf, toast, viewer, st } = ctx;
-  let open = false, update = null;
+  let open = false, update = null, pendingN = 0;
   const read = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
   const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* stockage plein */ } };
   const mine = () => (Array.isArray(read(MINE, [])) ? read(MINE, []) : []).filter((m) => m && m.name && Array.isArray(m.size));
@@ -138,7 +160,7 @@ export function createFurniture(ctx) {
     const saved = read(PREF, {});
     // at : où est le milieu de la pièce, en % de la largeur et de la profondeur (null = posée librement à la souris)
     const s = { shop: "ikea", type: "etageres", key: "kallax", size: [...findFurniture("kallax").size], kind: "case", back: false, src: "est",
-      at: [50, 50], pos: [0, 0], copies: false, jeu: 1, aimant: true, tab: "meuble" };
+      at: [50, 50], pos: [0, 0], copies: false, n: 1, jeu: 1, aimant: true, tab: "meuble" };
     const pick = (key) => {
       const it = findFurniture(key), me = !it && key.startsWith("moi:") ? mine().find((m) => "moi:" + m.name === key) : null;
       if (it) { const g = whereIs(key); s.shop = g.store; s.type = g.type; s.key = key; s.size = it.size.map(Number); s.kind = it.kind || "case"; s.back = it.back !== false; s.src = it.src || null; }
@@ -152,6 +174,7 @@ export function createFurniture(ctx) {
     if (saved.jeu >= 0 && saved.jeu <= 50) s.jeu = Number(saved.jeu);
     if (saved.aimant === false) s.aimant = false;
     if (TABS.some((t) => t[0] === saved.tab)) s.tab = saved.tab;
+    if (pendingN) { s.n = pendingN; pendingN = 0; }
     const keep = () => write(PREF, { key: s.key, size: s.size, kind: s.kind, shop: s.shop, type: s.type, jeu: s.jeu, aimant: s.aimant, tab: s.tab });
     const isOpen = () => isOpenKind(s.kind);
     const dimText = (it) => (isOpenKind(it.kind) ? "" : ` (intérieur ${it.size.map((v) => mm(v)).join(" × ")})`);
@@ -260,14 +283,25 @@ export function createFurniture(ctx) {
         if (s.at[i] !== null) s.pos[i] = placeAt(s.at[i], s.size[i], b.size[i], i === 1);
         else { const lim = s.size[i] - b.size[i]; s.pos[i] = lim >= 0 ? Math.max(0, Math.min(lim, s.pos[i])) : i ? lim : lim / 2; }
       }
-      const pos = s.copies && r.fits ? [0, 0] : s.pos;
+      // « Combien » : n pièces rangées de gauche à droite, puis rangée suivante vers le fond
+      const many = s.n > 1 ? packFit(b.size, s.size, s.n, 0, op) : null, manyOk = !!many && many.k >= 1 - 1e-9;
+      // de gauche à droite d'abord : autant de front que possible, puis la rangée suivante
+      const line = !many ? 1 : r.fits && r.count[0] * r.count[1] >= s.n ? Math.min(s.n, r.count[0]) : manyOk ? many.a : Math.max(1, Math.min(s.n, r.fits ? r.count[0] : 1));
+      const rows = many ? Math.ceil(s.n / line) : 1;
+      const pos = (s.copies && r.fits) || many ? [0, 0] : s.pos;
       const at = (px, py, pz) => [-s.size[0] / 2 + px - b.min[0], -s.size[1] / 2 + py - b.min[1], pz - b.min[2]];
       let copies = null;
-      if (s.copies && r.fits && r.total > 1) {
+      if (many) {
+        // elles se suivent, serrées ; si elles ne tiennent pas, on les montre quand même (en rouge) pour voir ce qui dépasse
+        const across = line;
+        copies = [];
+        for (let i = 1; i < s.n && i < 400; i++) copies.push([...at((i % across) * b.size[0], Math.floor(i / across) * b.size[1], 0), i]);
+      } else if (s.copies && r.fits && r.total > 1) {
         copies = [];
         for (let k = 0; k < r.count[2] && copies.length < 400; k++) for (let j = 0; j < r.count[1] && copies.length < 400; j++) for (let i = 0; i < r.count[0] && copies.length < 400; i++) if (i || j || k) copies.push([...at(i * b.size[0], j * b.size[1], k * b.size[2]), i + j + k]);
       }
-      viewer.setFurniture({ size: s.size, kind: s.kind, back: s.back, pos: at(pos[0], pos[1], 0), ok: r.fits, copies });
+      viewer.setFurniture({ size: s.size, kind: s.kind, back: s.back, pos: at(pos[0], pos[1], 0), ok: r.fits && (!many || manyOk), copies });
+      if (document.activeElement !== nIn) nIn.value = String(s.n);
       const k = ctx.getScale(), fit = fitted();
       if (document.activeElement !== pct) { pct.value = String(Math.round(k * 100) / 100).replace(".", ","); pct.classList.remove("bad"); }
       atIn.forEach((e, i) => { if (document.activeElement !== e) { e.value = String(Math.round((pos[i] + b.size[i] / 2) / s.size[i] * 1000) / 10).replace(".", ","); e.classList.remove("bad"); } });
@@ -282,16 +316,20 @@ export function createFurniture(ctx) {
         const bo = bestOrient(m.bb, s.size, op);
         if (bo.fits) list.push(chip("sens", null, "Dans un autre sens, elle rentre : onglet « Tourner », puis « Trouver le bon sens »."));
       }
+      if (many) list.push(manyOk ? chip("combien", true, `Les ${s.n} tiennent côte à côte : ${line} de front` + (rows > 1 ? `, sur ${rows} rangées.` : "."))
+        : chip("combien", false, `Les ${s.n} ne tiennent pas à cette taille` + (r.fits ? ` (il en rentre ${r.count[0] * r.count[1]})` : "") + ". Clique sur « Ajuster au meuble » : elles seront réduites juste ce qu’il faut."));
       if (fit.length) list.push(chip("rempli", true, fit.length === 3 ? "Elle est étirée pour remplir tout le meuble." : `Elle est étirée pour remplir ${fit.map((i) => SENS[i]).join(" et ")}.`));
       if (r.fits && r.total > 1) list.push(chip("nombre", true, `Tu peux en ranger ${r.total} : ${r.count[0]} de front, ${r.count[1]} en profondeur` + (r.count[2] > 1 ? `, sur ${r.count[2]} étages.` : ".")));
       const g = r.grow(s.jeu, fit) * k;
       if (isFinite(g) && g > 0.5) list.push(chip("maxi", null, r.fits ? `Elle peut grandir jusqu’à ${nf(Math.floor(g * 10) / 10, 1)} % avant de toucher.` : `Dans ce sens, elle rentre si tu la réduis à ${nf(Math.floor(g * 10) / 10, 1)} %.`));
-      if (r.fits && !s.copies) {
+      if (r.fits && !s.copies && !many) {
         const left = pos[0], right = s.size[0] - b.size[0] - pos[0], front = pos[1], backv = s.size[1] - b.size[1] - pos[1];
         list.push(chip("place", null, `Vide à gauche ${mm(left)} mm, à droite ${mm(right)} mm, devant ${mm(front)} mm, derrière ${mm(backv)} mm.`));
       }
       if (s.src) list.push(chip("mesure", null, s.src === "pub" ? (op ? "Taille du plateau publiée par le fabricant." : "Largeur et profondeur publiées par le fabricant. La hauteur dépend de ton montage : corrige-la.") : "Intérieur estimé à partir de la taille extérieure : vérifie avec un mètre."));
       chips.replaceChildren(...list);
+      const [gx, gy] = gridCells(s.size);
+      gridInfo.textContent = fr(gx && gy ? `Grille Gridfinity : ${gx} × ${gy} cases de 42 mm tiennent ici (il reste ${mm(s.size[0] - gx * 42)} mm en largeur et ${mm(s.size[1] - gy * 42)} mm en profondeur).` : "Ce meuble est trop petit pour une case Gridfinity de 42 mm.");
       if (frame) viewer.fit([0.5, -1, 0.42], [[-s.size[0] / 2, -s.size[1] / 2, 0], [s.size[0] / 2, s.size[1] / 2, op ? Math.max(b.size[2], Math.min(s.size[0], s.size[1]) / 2) : s.size[2]]], (bar.offsetHeight + 28) / Math.max(200, $(".stage").clientHeight));
     };
     // glisser la pièce à la souris, au pas choisi (dix fois plus fin avec Maj) ; l'aimant la colle aux parois et au milieu
@@ -308,6 +346,53 @@ export function createFurniture(ctx) {
       });
       update(false);
     };
+    // « Combien » et « Ajuster au meuble » : toujours visibles, en haut du panneau
+    const nIn = h("input", { type: "text", inputmode: "numeric", autocomplete: "off", spellcheck: "false", id: "meubleN", title: "Combien de pièces identiques tu veux ranger côte à côte dans ce meuble" });
+    nIn.addEventListener("input", () => { const v = Math.round(num(nIn)); const good = nIn.value.trim() !== "" && v >= 1 && v <= 200; nIn.classList.toggle("bad", !good); if (good) { s.n = v; if (v > 1) { s.copies = false; cp.checked = false; } update(false); } });
+    const nSteps = ctx.stepButtons(() => nIn, 1, () => {});
+    const auto = () => {
+      const m = st.mesh; if (!m) return;
+      if (ctx.fixedSize()) { toast("Une pièce Gridfinity garde sa taille standard : change plutôt son nombre de cases, à gauche."); return; }
+      if (fitted().length) { toast("La pièce est étirée pour remplir le meuble. Clique d’abord sur « Forme d’origine » (onglet « Taille et remplissage »)."); return; }
+      const op = isOpen(), k0 = ctx.getScale();
+      // on essaie les 6 façons de la poser ; on garde le sens actuel sauf si un autre permet nettement plus grand
+      const all = POSES.map((p, i) => ({ ...packFit(orientedBox(m.bb, p).size, s.size, s.n, s.jeu, op), p, i }));
+      const top = all.reduce((x, y) => (y.k > x.k ? y : x)); const best = all[0].k >= top.k * 0.98 ? all[0] : top;
+      const g = Math.floor(best.k * k0 * 10 + 1e-6) / 10;
+      if (!isFinite(g) || !(g > 0.5)) { toast("Ce meuble est trop petit pour cette pièce."); return; }
+      if (best.i !== 0) ctx.turn(best.p);
+      ctx.setScale(g, false); s.at = [0, 0];
+      toast((s.n > 1 ? `Les ${s.n} pièces tiennent maintenant côte à côte : taille réglée à ${nf(g, 1)} %` : `Ta pièce est à la bonne taille pour ce meuble : ${nf(g, 1)} %`) + (best.i !== 0 ? ", et elle a été tournée dans le meilleur sens." : ".") + " Il te reste à l’exporter" + (s.n > 1 ? ` et à l’imprimer ${s.n} fois.` : "."));
+    };
+    // onglet « Rangements » : créer une grille, un bac, ou chercher une idée à importer
+    const gridInfo = h("span", { class: "mgi", id: "meubleGrid" });
+    const make = (name, f) => ctx.newPart(name, { type: "shape", mode: "add", x: "0", y: "0", z: "0", rx: "0", ry: "0", rz: "0", ...f });
+    const mkPlate = () => {
+      const [gx, gy] = gridCells(s.size); if (!gx || !gy) { toast("Ce meuble est trop petit pour une case Gridfinity."); return; }
+      // des plaques toutes pareilles, de 6 cases au plus, qui se mettent bout à bout
+      const px = Math.ceil(gx / 6), py = Math.ceil(gy / 6), a = Math.floor(gx / px), b2 = Math.floor(gy / py), need = px * py;
+      pendingN = need;
+      make(`Grille Gridfinity ${a} × ${b2}`, { kind: "gridplate", name: "Grille Gridfinity 1", a: String(a), b: String(b2) });
+      toast(need > 1 ? `Voici une plaque de ${a} × ${b2} cases. Il en faut ${need}, bout à bout, pour couvrir ${a * px} × ${b2 * py} cases du meuble : imprime-la ${need} fois.` : `Voici la grille de ${a} × ${b2} cases pour ce meuble.`, 8000);
+    };
+    const mkBin = () => {
+      const [gx, gy] = gridCells(s.size); if (!gx || !gy) { toast("Ce meuble est trop petit pour une case Gridfinity."); return; }
+      const u = Math.max(2, Math.min(6, isOpen() ? 6 : Math.floor((s.size[2] - 4.65) / 7)));
+      make("Bac Gridfinity", { kind: "gridbin", name: "Bac Gridfinity 1", a: String(Math.min(2, gx)), b: String(Math.min(2, gy)), u: String(u), t: "1.2" });
+      toast("Voici un bac Gridfinity. Change ses cases et sa hauteur à gauche, puis mets « Combien » pour voir combien tu en ranges.", 7000);
+    };
+    const mkBac = () => {
+      const w = s.size[0] - s.jeu, d = s.size[1] - s.jeu, hh = isOpen() ? 40 : Math.min(s.size[2] - s.jeu, 120);
+      if (!(w > 5 && d > 5 && hh > 2)) { toast("Ce meuble est trop petit pour un bac."); return; }
+      const r3 = (v) => String(Math.round(v * 100) / 100);
+      make("Bac sur mesure", { kind: "bac", name: "Bac de rangement 1", a: r3(w), b: r3(d), h: r3(hh), t: "1.6", r: "3", nx: "1", ny: "1" });
+      toast("Voici un bac qui remplit ce meuble. À gauche, ajoute des compartiments ou change sa hauteur.", 7000);
+    };
+    const idea = h("select", { id: "meubleIdea", title: "Une idée de rangement à chercher" }, IDEAS.map(([t], i) => h("option", { value: String(i) }, t)));
+    const site = (id, label, url) => h("a", { class: "btn", id, target: "_blank", rel: "noopener noreferrer", href: url(IDEAS[0][1]), title: "Ouvre la recherche dans un nouvel onglet. Télécharge le fichier, puis reviens ici et clique sur « Importer »." }, label);
+    const mw = site("meubleMW", "Chercher sur MakerWorld", (q) => "https://makerworld.com/fr/search/models?keyword=" + encodeURIComponent(q));
+    const pr = site("meublePR", "Chercher sur Printables", (q) => "https://www.printables.com/search/models?q=" + encodeURIComponent(q));
+    idea.addEventListener("change", () => { const q = IDEAS[Number(idea.value)][1]; mw.href = "https://makerworld.com/fr/search/models?keyword=" + encodeURIComponent(q); pr.href = "https://www.printables.com/search/models?q=" + encodeURIComponent(q); });
     const turn = (id, key, label, title) => h("button", { class: "btn", id, title, onclick: () => ctx.turn(MOVES[key]) }, label);
     const best = () => {
       const bo = bestOrient(st.mesh.bb, s.size, isOpen());
@@ -349,10 +434,20 @@ export function createFurniture(ctx) {
         fillBtn("meubleFillY", "La profondeur", [1], "Étire la pièce d’avant en arrière pour remplir la profondeur du meuble"), fillZ,
         fillBtn("meubleFillAll", "Tout", [0, 1, 2], "Étire la pièce dans tous les sens pour remplir le meuble")),
       h("label", { class: "mpct" }, "Jeu ", jeu, " mm"), unfill);
+    panes.rangements = h("div", { class: "prow", "data-pane": "rangements" },
+      h("span", { class: "mgrp" }, h("b", {}, "Créer"),
+        h("button", { class: "btn primary", id: "meubleMkBac", title: "Crée, dans un nouvel onglet, un bac qui remplit ce meuble (avec le jeu choisi). Tu peux lui ajouter des compartiments.", onclick: mkBac }, "Un bac à la taille du meuble"),
+        h("button", { class: "btn", id: "meubleMkPlate", title: "Crée, dans un nouvel onglet, la grille Gridfinity qui tient dans ce meuble (6 × 6 cases au plus par plaque)", onclick: mkPlate }, "La grille Gridfinity"),
+        h("button", { class: "btn", id: "meubleMkBin", title: "Crée, dans un nouvel onglet, un bac Gridfinity à régler (cases, hauteur)", onclick: mkBin }, "Un bac Gridfinity")),
+      gridInfo,
+      h("span", { class: "mgrp" }, h("b", {}, "Idées à importer"), idea, mw, pr));
     lists(); fill();
     bar.append(
       h("div", { class: "prow" }, h("b", {}, "Essayer dans un meuble"), tabs, h("span", { class: "grow" }), info, h("button", { class: "btn", id: "meubleClose", onclick: close }, "Fermer")),
-      panes.meuble, panes.tourner, panes.placer, panes.remplir, chips,
+      h("div", { class: "prow mtop" }, h("label", { class: "mpct" }, "Combien ? ", h("span", { class: "in" }, nSteps[0], nIn, nSteps[1])),
+        h("button", { class: "btn primary", id: "meubleAuto", title: "Met la pièce à la plus grande taille qui rentre dans ce meuble, dans le meilleur sens, en gardant ses proportions. Avec « Combien » sur 2 ou plus, la taille est réglée pour que toutes tiennent côte à côte.", onclick: auto }, "Ajuster au meuble"),
+        h("span", { class: "mhint" }, "Un clic : la pièce prend la bonne taille pour ce meuble. Ensuite, exporte et imprime.")),
+      panes.meuble, panes.tourner, panes.placer, panes.remplir, panes.rangements, chips,
       h("div", { class: "note mnote" }, "Glisse la pièce avec la souris pour la déplacer. Vérifie les dimensions avec un mètre et corrige les chiffres au besoin. Les noms servent de repère : Gabarit n’est lié à aucune marque."));
     showTab(s.tab);
     $(".stage").append(bar); ctx.changed?.(); update(true);

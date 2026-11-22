@@ -329,6 +329,40 @@ function readyShape(f, vars) {
     let d = R.drawText(txt, { startX: 0, startY: 0, fontSize: pos("s", 12, "Taille des lettres") / 0.73, fontFamily: "gabarit" });
     const [lo, hi] = d.boundingBox.bounds;
     s = up(d.translate(-(lo[0] + hi[0]) / 2, -(lo[1] + hi[1]) / 2), pos("h", 3, "Épaisseur"));
+  } else if (k === "gridbin" || k === "gridplate") {
+    // Gridfinity : cases de 42 mm, hauteur par unités de 7 mm. Le pied d'un bac fait 4,75 mm (0,8 en biais,
+    // 1,8 droit, 2,15 en biais) ; la grille a le même profil en creux, haut de 4,65 mm.
+    const a = Math.round(val("a", 2)), b = Math.round(val("b", 2));
+    if (!(a >= 1 && a <= 8 && b >= 1 && b <= 8)) throw new Error("Le nombre de cases doit être entre 1 et 8 dans chaque sens");
+    const rr = (w, r, z) => R.drawRoundedRectangle(w, w, r).sketchOnPlane("XY", z);
+    const plate = k === "gridplate";
+    // un pied (ou un creux) : trois tranches empilées
+    const z1 = plate ? 0.7 : 0.8, z2 = z1 + 1.8, z3 = plate ? 4.65 : 4.75;
+    const w0 = plate ? 36.3 : 35.6, w1 = plate ? 37.7 : 37.2, w2 = plate ? 41.9 : 41.5, r0 = plate ? 1.15 : 0.8, r1 = plate ? 1.85 : 1.6, r2 = plate ? 3.95 : 3.75;
+    const one = () => rr(w0, r0, 0).loftWith(rr(w1, r1, z1), { ruled: true }).fuse(rr(w1, r1, z1).extrude(z2 - z1)).fuse(rr(w1, r1, z2).loftWith(rr(w2, r2, z3), { ruled: true }));
+    const cell = one(); const cells = [];
+    for (let i = 0; i < a; i++) for (let j = 0; j < b; j++) cells.push(cell.clone().translate([(i - (a - 1) / 2) * 42, (j - (b - 1) / 2) * 42, 0]));
+    if (plate) {
+      s = R.drawRoundedRectangle(a * 42, b * 42, 4).sketchOnPlane("XY").extrude(4.65);
+      for (const c of cells) s = s.cut(c);
+    } else {
+      const u = Math.round(val("u", 6)); if (!(u >= 2 && u <= 30)) throw new Error("La hauteur doit être entre 2 et 30 unités de 7 mm");
+      const t = Math.max(0.8, Math.min(5, val("t", 1.2))); const W = a * 42 - 0.5, D = b * 42 - 0.5, H = u * 7;
+      s = R.drawRoundedRectangle(W, D, 3.75).sketchOnPlane("XY", 4.75).extrude(H - 4.75);
+      s = s.cut(R.drawRoundedRectangle(W - 2 * t, D - 2 * t, Math.max(0.5, 3.75 - t)).sketchOnPlane("XY", 7).extrude(H - 7 + 1));
+      for (const c of cells) s = s.fuse(c);
+    }
+  } else if (k === "bac") {
+    // un bac de rangement ouvert dessus, avec des séparations si on en veut
+    const a = pos("a", 100, "Largeur"), b = pos("b", 80, "Profondeur"), h = pos("h", 40, "Hauteur"), t = pos("t", 1.6, "Épaisseur des parois");
+    const nx = Math.round(val("nx", 1)), ny = Math.round(val("ny", 1));
+    if (!(nx >= 1 && nx <= 12 && ny >= 1 && ny <= 12)) throw new Error("Le nombre de compartiments doit être entre 1 et 12 dans chaque sens");
+    if (!(t * 2 < Math.min(a, b) - 1 && t < h - 0.5)) throw new Error("Les parois sont trop épaisses pour ce bac");
+    const r = Math.max(0, Math.min(val("r", 3), Math.min(a, b) / 2 - 0.01)), ri = Math.max(0, r - t);
+    const rect = (w, d, rad) => (rad > 0.01 ? R.drawRoundedRectangle(w, d, rad) : R.drawRectangle(w, d));
+    s = up(rect(a, b, r), h).cut(rect(a - 2 * t, b - 2 * t, ri).sketchOnPlane("XY", t).extrude(h));
+    for (let i = 1; i < nx; i++) s = s.fuse(R.drawRectangle(t, b - t).translate(-a / 2 + (a * i) / nx, 0).sketchOnPlane("XY").extrude(h));
+    for (let j = 1; j < ny; j++) s = s.fuse(R.drawRectangle(a - t, t).translate(0, -b / 2 + (b * j) / ny).sketchOnPlane("XY").extrude(h));
   } else throw new Error("Forme inconnue");
   const rot = [val("rx", 0), val("ry", 0), val("rz", 0)];
   if (rot[0]) s = s.rotate(rot[0], [0, 0, 0], [1, 0, 0]);

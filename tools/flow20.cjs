@@ -21,7 +21,7 @@ const assert = (c, m) => { if (!c) { console.error("ÉCHEC :", m); process.exitC
   assert(await p.locator("#coach button[data-coach]").count() === 3, "coup de pouce : 3 pistes pour commencer");
   // chaque forme prête se construit
   const kinds = await G(() => { document.querySelector(".tbtn[data-tool=shapes]").click(); return [...document.querySelectorAll("#shapes [data-shape]")].map((e) => e.dataset.shape); });
-  assert(kinds.length === 12, "12 formes prêtes proposées");
+  assert(kinds.length === 15, "15 formes prêtes proposées");
   await p.keyboard.press("Escape"); await p.mouse.click(900, 500);
   const vols = {};
   for (const k of kinds) {
@@ -35,7 +35,7 @@ const assert = (c, m) => { if (!c) { console.error("ÉCHEC :", m); process.exitC
   }
   console.log("volumes", JSON.stringify(vols));
   assert(Math.abs(vols.box - 24000) < 2 && Math.abs(vols.cyl - 21206) < 30 && Math.abs(vols.sphere - 14137) < 40 && Math.abs(vols.cone - 7069) < 30, "volumes exacts : boîte, cylindre, sphère, cône");
-  assert(kinds.every((k) => typeof vols[k] === "number" && vols[k] > 0), "les 12 formes donnent un volume");
+  assert(kinds.every((k) => typeof vols[k] === "number" && vols[k] > 0), "les 15 formes donnent un volume");
   // parcours : boîte, puis cylindre posé sur le dessus, puis trou creusé sur le côté
   await G(() => window.gabarit.loadDoc({ version: 1, name: "Essai", material: "pla", params: [], features: [] })); await p.waitForTimeout(300);
   await p.click(".tbtn[data-tool=shapes]"); await p.waitForTimeout(300);
