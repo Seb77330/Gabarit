@@ -684,7 +684,7 @@ export class Viewer {
       const cm = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
       this.furnMats.push(cm);
       const im = new THREE.InstancedMesh(this.geo, cm, spec.copies.length); const one = new THREE.Vector3(1, 1, 1); const M = new THREE.Matrix4();
-      const tones = [new THREE.Color(0xdde4ec), new THREE.Color(0xaebccb)];
+      const tones = [new THREE.Color(0xaab7c6), new THREE.Color(0x8496aa)];
       spec.copies.forEach((c, i) => { im.setMatrixAt(i, M.compose(new THREE.Vector3(...c.slice(0, 3)), q, one)); im.setColorAt(i, tones[(c[3] || 0) % 2]); });
       im.instanceMatrix.needsUpdate = true; if (im.instanceColor) im.instanceColor.needsUpdate = true; im.frustumCulled = false; g.add(im);
     }

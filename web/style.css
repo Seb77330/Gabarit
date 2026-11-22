@@ -600,3 +600,9 @@ table.bom th { font-weight: 650; background: var(--field); }
 .meublebar .btn:disabled { opacity: .45; cursor: default; }
 .meublebar #meubleSel { max-width: 300px; }
 .btnrow.turns { flex-wrap: wrap; }
+.meublebar .mtop { padding: 6px 8px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 7%, var(--card)); }
+.meublebar .mtop .mpct { font-weight: 600; color: var(--ink); }
+.meublebar #meubleN { width: 44px; text-align: center; }
+.meublebar .mhint, .meublebar .mgi { font-size: 12px; color: var(--ink2); }
+.meublebar a.btn { text-decoration: none; }
+.meublebar #meubleIdea { max-width: 210px; }

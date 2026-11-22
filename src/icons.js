@@ -78,6 +78,9 @@ export const ICONS = {
 };
 // Dessins des formes prêtes.
 export const SHAPE_ICONS = {
+  bac: s('<path d="M3.500 8l1.500 11h14L20.500 8z"/><path d="M3.500 8h17M12 8v11"/>'),
+  gridbin: s('<path d="M4 6h16v11H4z"/><path d="M5.500 17v2.500h4V17M14.500 17v2.500h4V17M12 6v11"/>'),
+  gridplate: s('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/>'),
   box: s('<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/>'),
   cyl: s('<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/>'),
   sphere: s('<circle cx="12" cy="12" r="9"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/><path d="M12 3c-2 2-3 5.3-3 9s1 7 3 9" opacity=".45"/>'),

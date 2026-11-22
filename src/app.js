@@ -461,7 +461,7 @@ function onWorker(m) {
     st.building = false; showBusy(false);
     if (m.heap > 1.4e9) setTimeout(restartWorker, 50); // libère la mémoire du noyau
     st.errors = m.errors; st.info = m.info; st.mesh = m.mesh; st.lastMs = m.ms;
-    viewer.setMesh(m.mesh); extras.refreshPrint(); meuble?.refresh();
+    viewer.setMesh(m.mesh); extras.refreshPrint(); meuble?.refresh(); if (afterMesh) { const fn = afterMesh; afterMesh = null; setTimeout(fn, 50); }
     viewer.setCog(st.showCog && m.mesh?.cog ? m.mesh.cog : null);
     if (st.firstFit && m.mesh) { viewer.fit([1, -1.3, 0.9]); st.firstFit = false; }
     if (st.editSketch) updateSketchRefs();
@@ -777,6 +777,9 @@ const SHAPES = {
   heart: ["Cœur", { a: "40", h: "5" }, [["a", "Largeur"], ["h", "Épaisseur"]]],
   gear: ["Engrenage", { n: "16", m: "2", d: "5", h: "6" }, [["n", "Nombre de dents", ""], ["m", "Taille des dents (module)"], ["d", "Trou au centre"], ["h", "Épaisseur"]]],
   text: ["Texte", { txt: "Gabarit", s: "12", h: "3" }, [["s", "Taille des lettres"], ["h", "Épaisseur"]]],
+  bac: ["Bac de rangement", { a: "100", b: "80", h: "40", t: "1.6", r: "3", nx: "1", ny: "1" }, [["a", "Largeur (X)"], ["b", "Profondeur (Y)"], ["h", "Hauteur (Z)"], ["t", "Épaisseur des parois"], ["r", "Coins arrondis"], ["nx", "Compartiments en largeur", ""], ["ny", "Compartiments en profondeur", ""]]],
+  gridbin: ["Bac Gridfinity", { a: "2", b: "2", u: "6", t: "1.2" }, [["a", "Cases en largeur (42 mm)", ""], ["b", "Cases en profondeur (42 mm)", ""], ["u", "Hauteur, en unités de 7 mm", ""], ["t", "Épaisseur des parois"]]],
+  gridplate: ["Grille Gridfinity", { a: "4", b: "4" }, [["a", "Cases en largeur (42 mm)", ""], ["b", "Cases en profondeur (42 mm)", ""]]],
 };
 const r2 = (v) => String(Math.round(v * 100) / 100);
 // Angles (autour de Y puis de Z) qui amènent l'axe de la forme sur la direction n.
@@ -2605,6 +2608,8 @@ function help() {
     <h3>Quadrillage fin</h3><p>À droite de la vue, <b>Pas</b> règle la taille des plus petits carreaux, de 10 mm à 0,01 mm. Zoome : les petits carreaux apparaissent sur le sol. Les flèches, les boutons <b>−</b> et <b>+</b> et la grille du dessin avancent de ce pas, et dix fois plus fin avec <b>Maj</b>.</p>
     <h3>Tourner la pièce</h3><p>À droite de la vue, <b>Tourner</b> change le sens de toute la pièce : <b>quart de tour</b> à gauche ou à droite, <b>demi-tour</b>, la <b>coucher</b> sur le côté ou vers l’avant, la mettre <b>tête en bas</b>, ou la passer au <b>miroir</b> (gauche et droite inversées). Chaque clic s’ajoute au précédent, la pièce reste posée au même endroit, et « Remettre droit » annule tout.</p>
     <h3>Essayer dans un meuble</h3><p><b>Dans un meuble</b> pose ta pièce dans un meuble pour voir si elle <b>rentre</b>, combien il reste de place, <b>combien tu peux en ranger</b> et jusqu’où tu peux l’<b>agrandir</b>. Quatre onglets : <b>Meuble</b> (choisis le magasin, le type, puis le modèle : étagères, bureaux, tablettes, tiroirs, boîtes ; ou tape tes dimensions et clique sur « Garder ce meuble »), <b>Tourner</b> (quart de tour, coucher, miroir, « Trouver le bon sens »), <b>Placer</b> (à gauche, au centre, à droite, devant, au milieu, au fond, ou à un pourcentage précis ; avec l’<b>aimant</b>, la pièce glissée à la souris se colle aux parois et au milieu) et <b>Taille et remplissage</b> (« Remplir » étire la pièce pour qu’elle occupe toute la largeur, la profondeur ou la hauteur du meuble, avec le jeu que tu choisis). Les dimensions marquées « estimées » sont à vérifier avec un mètre.</p>
+    <h3>Ajuster au meuble, en ranger plusieurs</h3><p>Dans <b>Dans un meuble</b>, le bouton <b>Ajuster au meuble</b> met ta pièce, d’un clic, à la plus grande taille qui rentre, dans le meilleur sens. Il ne reste qu’à l’exporter et à l’imprimer. Avec <b>Combien ?</b> sur 2, 3 ou plus, les pièces se rangent de gauche à droite puis à la suite ; si elles ne tiennent pas, « Ajuster au meuble » les réduit juste ce qu’il faut.</p>
+    <h3>Rangements et Gridfinity</h3><p>L’onglet <b>Rangements</b> crée, dans un nouvel onglet, <b>un bac à la taille du meuble</b> (ajoute-lui des compartiments à gauche), <b>la grille Gridfinity</b> qui tient dans ton tiroir, ou <b>un bac Gridfinity</b>. Ces trois formes sont aussi dans « Formes prêtes ». « Idées à importer » ouvre la recherche sur MakerWorld ou Printables : télécharge le fichier, clique sur « Importer », puis sur « Ajuster au meuble ». Les tiroirs de cuisine Metod (Maximera) sont dans IKEA, type « Tiroirs de cuisine Metod ».</p>
     <h3>Allonger une partie</h3><p>Pour changer seulement un morceau (le milieu d’une chaise pour en faire un banc, la tige d’une lampe), choisis <b>Allonger</b>, pose <b>deux traits</b> sur la pièce en cliquant deux fois, puis donne la taille de la partie comprise entre les deux, en millimètres ou en pourcentage, ou tire la flèche orange. Le reste de la pièce ne change pas. Tu peux allonger plusieurs parties, en hauteur, en largeur ou en longueur. Après cette étape, les formes rondes deviennent de petites facettes très fines : fais plutôt les arrondis et les trous avant.</p>
     <h3>Onglets</h3><p>Chaque pièce ouverte a son onglet. Un <b>point</b> sur l’onglet signale une pièce modifiée. Quand tu fermes l’onglet, Gabarit te demande si tu veux l’<b>enregistrer</b> : Enregistrer, Ne pas enregistrer ou Annuler.</p>
     <h3>Changer une cote sur la pièce</h3><p><b>Double-clique</b> sur une face : l’étape qui l’a faite s’ouvre, et ses cotes s’affichent à côté de la souris. Tape la nouvelle valeur, puis Entrée. Échap annule.</p>
@@ -2852,7 +2857,15 @@ meuble = createFurniture({
   },
   commit: () => pushHistory(),
   changed: () => { renderGestures(); renderCoach(); },
+  fixedSize: () => doc.features.some((f) => f.type === "shape" && !f.suppressed && (f.kind === "gridbin" || f.kind === "gridplate")),
+  // une nouvelle pièce (un bac, une grille) dans son onglet, puis le meuble rouvert dessus
+  newPart: (name, f) => {
+    const d = { version: 1, name: nextPartName(name), material: doc.material || "pla", params: [], features: [{ id: "f1", ...f }] };
+    welcome(false); openTab(d); afterMesh = () => { if (!meuble.isOpen()) meuble.panel(); };
+  },
 });
+let afterMesh = null;
+function nextPartName(base) { const lib = library(); let n = base, i = 2; while (lib[n] || tabs.list.some((t) => t.name === n)) n = `${base} ${i++}`; return n; }
 function stageTool() { return !!(extras?.isPrintOpen() || meuble?.isOpen()); } // la vue est occupée par un outil : pas de flèches ni de double-clic
 const KEYS = {
   sketch: "dessin profil 2d croquis", extrude: "volume epaisseur bossage tirer", cut: "creuser enlever percer poche", revolve: "tourner tour axe rond",
@@ -2860,7 +2873,7 @@ const KEYS = {
   thread: "filet filetage vis taraud taraudage m3 m4 m5 m6 m8 m10 m12", helix: "ressort helice spirale", rib: "renfort raidisseur gousset",
   mirror: "miroir symetrique", pattern: "repeter copier grille cercle reseau", loft: "transition relier", sweep: "tuyau chemin glisser",
   draft: "demoulage incliner", import: "step stl ouvrir modele svg dxf logo dessin", measure: "distance cote longueur", section: "couper interieur",
-  print: "impression imprimante 3d support surplomb orientation trancheur", meuble: "meuble etagere ikea kallax billy eket besta ivar bureau plateau lagkapten micke tablette lack boite trofast samla bac casier rangement ranger rentre tient gridfinity tiroir remplir aimant magasin", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
+  print: "impression imprimante 3d support surplomb orientation trancheur", meuble: "ajuster combien plusieurs cuisine metod maximera gridfinity grille bac rangement meuble etagere ikea kallax billy eket besta ivar bureau plateau lagkapten micke tablette lack boite trofast samla bac casier rangement ranger rentre tient gridfinity tiroir remplir aimant magasin", drawing: "plan 2d pdf imprimer cotation", plane: "plan reference decale incline",
   scale: "taille agrandir reduire echelle pourcentage plus grand plus petit dimension",
   stretch: "etirer agrandir rallonger allonger raccourcir section zone partie banc tige pied",
   shapes: "forme prete primitive boite cube cylindre sphere boule cone tube anneau tore etoile coeur engrenage texte",
